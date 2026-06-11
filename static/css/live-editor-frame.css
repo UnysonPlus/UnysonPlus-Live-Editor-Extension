@@ -103,6 +103,10 @@ body.fw-live-editor-frame-active [data-fw-item-id] {
 	background: rgba( 255, 255, 255, .18 );
 }
 
-#fw-le-overlay .fw-le-act-edit {
-	font-size: 13px;
+#fw-le-overlay .fw-le-tag__btn svg {
+	display: block;
+}
+
+#fw-le-overlay .fw-le-tag__btn--danger:hover {
+	background: #e2483d;
 }

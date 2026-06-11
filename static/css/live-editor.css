@@ -180,3 +180,80 @@ body.fw-live-editor-shell {
 	border: 0;
 	background: #fff;
 }
+
+/* ---- Confirm dialog ------------------------------------------------------- */
+
+.fw-le-confirm-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba( 20, 21, 26, .55 );
+}
+
+.fw-le-confirm {
+	width: 400px;
+	max-width: calc( 100vw - 40px );
+	background: #fff;
+	border-radius: 10px;
+	box-shadow: 0 24px 64px rgba( 0, 0, 0, .4 );
+	padding: 24px 24px 20px;
+	box-sizing: border-box;
+}
+
+.fw-le-confirm__title {
+	font-size: 16px;
+	font-weight: 700;
+	color: #1e1f26;
+	margin: 0 0 8px;
+}
+
+.fw-le-confirm__msg {
+	font-size: 13px;
+	line-height: 1.55;
+	color: #6b6f7d;
+	margin: 0 0 22px;
+}
+
+.fw-le-confirm__actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 10px;
+}
+
+.fw-le-confirm__btn {
+	height: 36px;
+	padding: 0 16px;
+	border-radius: 6px;
+	border: 1px solid transparent;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, filter .12s ease;
+}
+
+.fw-le-confirm__btn--cancel {
+	background: #fff;
+	color: #4b4f5c;
+	border-color: #d8dae0;
+}
+
+.fw-le-confirm__btn--cancel:hover {
+	background: #f3f4f6;
+}
+
+.fw-le-confirm__btn--ok {
+	background: #4f8cff;
+	color: #fff;
+}
+
+.fw-le-confirm__btn--ok.fw-le-confirm__btn--danger {
+	background: #e2483d;
+}
+
+.fw-le-confirm__btn--ok:hover {
+	filter: brightness( .94 );
+}

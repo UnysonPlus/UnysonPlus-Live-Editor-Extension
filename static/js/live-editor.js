@@ -52,6 +52,19 @@
 		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
 	}
 
+	/** A fresh 32-hex builder unique_id (same shape the builder uses). */
+	function generateUid() {
+		if ( window.crypto && window.crypto.getRandomValues ) {
+			var a = new Uint8Array( 16 ), s = '';
+			window.crypto.getRandomValues( a );
+			for ( var i = 0; i < a.length; i++ ) { s += ( '0' + a[ i ].toString( 16 ) ).slice( -2 ); }
+			return s;
+		}
+		var h = '';
+		for ( var j = 0; j < 32; j++ ) { h += Math.floor( Math.random() * 16 ).toString( 16 ); }
+		return h;
+	}
+
 	var fwLiveEditor = {
 		config: cfg,
 
@@ -103,17 +116,30 @@
 			this.setStatus( 'connecting', ( cfg.l10n && cfg.l10n.connecting ) || 'Connecting…' );
 		},
 
+		// index[id] = { node, siblings (the array containing node), parentId }.
+		// `siblings` lets delete/duplicate splice in/out; rebuild after any
+		// structural change so positions stay correct.
 		buildIndex: function ( items, parentId ) {
 			if ( ! items || ! items.length ) { return; }
 			for ( var i = 0; i < items.length; i++ ) {
 				var it = items[ i ];
 				if ( ! it || typeof it !== 'object' ) { continue; }
 				var id = ( it.atts && it.atts.unique_id ) || it.unique_id;
-				if ( id ) { this.index[ id ] = it; }
+				if ( id ) { this.index[ id ] = { node: it, siblings: items, parentId: parentId }; }
 				if ( it._items && it._items.length ) {
 					this.buildIndex( it._items, id || parentId );
 				}
 			}
+		},
+
+		rebuildIndex: function () {
+			this.index = {};
+			this.buildIndex( this.model, null );
+		},
+
+		nodeOf: function ( id ) {
+			var entry = id && this.index[ id ];
+			return entry ? entry.node : null;
 		},
 
 		/* ---- messaging -------------------------------------------------- */
@@ -151,9 +177,130 @@
 					this.onSelect( data.payload );
 					this.openEditor( data.payload && data.payload.id );
 					break;
+				case 'duplicate-request':
+					this.duplicateItem( data.payload && data.payload.id );
+					break;
+				case 'delete-request':
+					this.confirmDelete( data.payload );
+					break;
 				default:
 					break;
 			}
+		},
+
+		/* ---- styled confirm dialog ------------------------------------- */
+
+		/** A lightweight, framework-styled confirm modal. cb runs on confirm. */
+		confirm: function ( opts, cb ) {
+			opts = opts || {};
+			if ( ! this.$.confirm ) {
+				this.$.confirm = $(
+					'<div class="fw-le-confirm-backdrop" style="display:none">' +
+						'<div class="fw-le-confirm" role="dialog" aria-modal="true">' +
+							'<div class="fw-le-confirm__title"></div>' +
+							'<div class="fw-le-confirm__msg"></div>' +
+							'<div class="fw-le-confirm__actions">' +
+								'<button type="button" class="fw-le-confirm__btn fw-le-confirm__btn--cancel"></button>' +
+								'<button type="button" class="fw-le-confirm__btn fw-le-confirm__btn--ok"></button>' +
+							'</div>' +
+						'</div>' +
+					'</div>'
+				).appendTo( 'body' );
+			}
+
+			var $c   = this.$.confirm;
+			var $ok  = $c.find( '.fw-le-confirm__btn--ok' );
+			var $no  = $c.find( '.fw-le-confirm__btn--cancel' );
+
+			$c.find( '.fw-le-confirm__title' ).text( opts.title || 'Are you sure?' );
+			$c.find( '.fw-le-confirm__msg' ).text( opts.message || '' );
+			$no.text( opts.cancelText || 'Cancel' );
+			$ok.text( opts.confirmText || 'Confirm' ).toggleClass( 'fw-le-confirm__btn--danger', !! opts.danger );
+
+			function close() {
+				$c.hide();
+				$ok.off( 'click' ); $no.off( 'click' ); $c.off( 'click' );
+			}
+			$ok.on( 'click', function () { close(); if ( cb ) { cb(); } } );
+			$no.on( 'click', close );
+			$c.on( 'click', function ( e ) { if ( e.target === $c[ 0 ] ) { close(); } } );
+
+			$c.css( 'display', 'flex' );
+			$ok.trigger( 'focus' );
+		},
+
+		confirmDelete: function ( payload ) {
+			payload = payload || {};
+			if ( ! payload.id ) { return; }
+			var self  = this;
+			var label = payload.label || 'item';
+			this.confirm( {
+				title:       'Delete ' + label + '?',
+				message:     'This removes it from the page. You can Exit without saving to undo.',
+				confirmText: 'Delete',
+				danger:      true
+			}, function () { self.deleteItem( payload.id ); } );
+		},
+
+		/* ---- structural ops (Phase A: duplicate / delete) -------------- */
+
+		/** Push the current model to the frame so its selection index stays in sync. */
+		syncFrameModel: function () {
+			this.toFrame( 'sync-model', { model: this.model } );
+		},
+
+		/** Deep-clone a node, regenerating unique_id on it and every descendant. */
+		cloneWithNewIds: function ( node ) {
+			var clone = JSON.parse( JSON.stringify( node ) );
+			( function regen( n ) {
+				var nid = generateUid();
+				if ( n.atts && typeof n.atts === 'object' ) { n.atts.unique_id = nid; }
+				if ( Object.prototype.hasOwnProperty.call( n, 'unique_id' ) ) { n.unique_id = nid; }
+				if ( n._items && n._items.length ) {
+					for ( var i = 0; i < n._items.length; i++ ) { regen( n._items[ i ] ); }
+				}
+			} )( clone );
+			return clone;
+		},
+
+		duplicateItem: function ( id ) {
+			var entry = id && this.index[ id ];
+			if ( ! entry ) { this.log( 'duplicate: unknown id', id ); return; }
+
+			var siblings = entry.siblings;
+			var pos = siblings.indexOf( entry.node );
+			if ( pos < 0 ) { return; }
+
+			var clone   = this.cloneWithNewIds( entry.node );
+			var cloneId = ( clone.atts && clone.atts.unique_id ) || clone.unique_id;
+			siblings.splice( pos + 1, 0, clone );
+
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+
+			var self = this;
+			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( clone ) }, function ( resp ) {
+				if ( resp && resp.success && resp.data && typeof resp.data.html === 'string' ) {
+					self.toFrame( 'insert-after', { afterId: id, id: cloneId, html: resp.data.html } );
+				} else {
+					window.console && console.error( '[fw-le-shell] duplicate render failed', resp );
+				}
+			} );
+		},
+
+		deleteItem: function ( id ) {
+			var entry = id && this.index[ id ];
+			if ( ! entry ) { this.log( 'delete: unknown id', id ); return; }
+
+			var pos = entry.siblings.indexOf( entry.node );
+			if ( pos < 0 ) { return; }
+			entry.siblings.splice( pos, 1 );
+
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+			this.toFrame( 'remove', { id: id } );
 		},
 
 		onFrameReady: function () {
@@ -179,7 +326,7 @@
 		/* ---- editing (Phase 2) ----------------------------------------- */
 
 		openEditor: function ( id ) {
-			var node = id && this.index[ id ];
+			var node = this.nodeOf( id );
 			if ( ! node ) { this.log( 'openEditor: unknown id', id ); return; }
 
 			var self = this;
@@ -240,7 +387,7 @@
 		},
 
 		renderItem: function ( id ) {
-			var node = this.index[ id ];
+			var node = this.nodeOf( id );
 			if ( ! node ) { return; }
 			var self = this;
 
@@ -294,10 +441,18 @@
 		},
 
 		onExit: function () {
-			if ( this.dirty && ! window.confirm( ( cfg.l10n && cfg.l10n.confirmExit ) || 'You have unsaved changes. Leave anyway?' ) ) {
+			var self = this;
+			var leave = function () { window.location.href = cfg.exitUrl || '/'; };
+			if ( this.dirty ) {
+				this.confirm( {
+					title:       'Discard unsaved changes?',
+					message:     'You have unsaved edits on this page. Leaving will discard them.',
+					confirmText: 'Leave',
+					danger:      true
+				}, leave );
 				return;
 			}
-			window.location.href = cfg.exitUrl || '/';
+			leave();
 		},
 
 		setStatus: function ( state, text ) {
