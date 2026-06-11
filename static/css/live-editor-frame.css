@@ -1,0 +1,24 @@
+/**
+ * Live Editor — frame (in-canvas) styles.
+ *
+ * Loaded onto the live page WHILE it is displayed inside the editor iframe
+ * (body.fw-live-editor-frame-active). Phase 0 keeps this minimal; the hover /
+ * selected outline rules for sections, columns and elements land in Phase 1.
+ *
+ * Everything here is gated on .fw-live-editor-frame-active so it can only ever
+ * affect the page when rendered inside the editor — never the public site.
+ */
+
+/* Give the canvas a little breathing room so edge outlines (Phase 1) aren't
+ * clipped against the iframe viewport, and keep selection chrome from causing
+ * horizontal scroll. */
+body.fw-live-editor-frame-active {
+	cursor: default;
+}
+
+/* Phase 1 will populate these. Declared now so the contract is visible:
+ *
+ *   .fw-live-editor-frame-active [data-fw-item-id]        — selectable wrapper
+ *   .fw-live-editor-frame-active .fw-le-hover  > outline  — hover highlight
+ *   .fw-live-editor-frame-active .fw-le-active > outline  — selected highlight
+ */

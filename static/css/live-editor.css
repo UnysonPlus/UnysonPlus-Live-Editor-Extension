@@ -1,0 +1,174 @@
+/**
+ * Live Editor — shell chrome.
+ *
+ * Styles the editor document (toolbar + iframe canvas) rendered by
+ * views/editor-shell.php. Scoped under .fw-live-editor-shell so it can never
+ * leak into the live page (which lives in the iframe, a separate document).
+ */
+
+html.fw-live-editor-html,
+body.fw-live-editor-shell {
+	margin: 0;
+	padding: 0;
+	height: 100%;
+	overflow: hidden;
+	background: #1e1f26;
+}
+
+.fw-le-app {
+	position: fixed;
+	inset: 0;
+	display: flex;
+	flex-direction: column;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* ---- Toolbar -------------------------------------------------------------- */
+
+.fw-le-toolbar {
+	flex: 0 0 auto;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	height: 48px;
+	padding: 0 12px;
+	background: #23252e;
+	border-bottom: 1px solid #34363f;
+	color: #e7e8ec;
+	box-shadow: 0 1px 0 rgba(0, 0, 0, .25);
+	z-index: 2;
+}
+
+.fw-le-toolbar__group {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	min-width: 0;
+}
+
+.fw-le-toolbar__group--center {
+	flex: 1 1 auto;
+	justify-content: center;
+}
+
+.fw-le-brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+	font-size: 13px;
+	letter-spacing: .2px;
+	color: #fff;
+}
+
+.fw-le-brand .dashicons {
+	color: #4f8cff;
+}
+
+.fw-le-doc-title {
+	font-size: 13px;
+	color: #aeb1bd;
+	max-width: 50vw;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* ---- Status pill ---------------------------------------------------------- */
+
+.fw-le-status {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: .4px;
+	padding: 3px 9px;
+	border-radius: 999px;
+	background: #34363f;
+	color: #c7c9d3;
+}
+
+.fw-le-status::before {
+	content: "";
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background: #d8a534;
+}
+
+.fw-le-status[data-state="ready"] {
+	background: rgba(46, 160, 102, .18);
+	color: #51c98a;
+}
+
+.fw-le-status[data-state="ready"]::before {
+	background: #2ea066;
+}
+
+/* ---- Buttons -------------------------------------------------------------- */
+
+.fw-le-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
+	padding: 0 14px;
+	border: 1px solid transparent;
+	border-radius: 6px;
+	font-size: 13px;
+	font-weight: 600;
+	line-height: 1;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, opacity .12s ease;
+}
+
+.fw-le-btn .dashicons {
+	font-size: 16px;
+	width: 16px;
+	height: 16px;
+}
+
+.fw-le-btn--ghost {
+	background: transparent;
+	color: #c7c9d3;
+	border-color: #40424d;
+}
+
+.fw-le-btn--ghost:hover {
+	background: #2c2e38;
+	color: #fff;
+}
+
+.fw-le-btn--primary {
+	background: #4f8cff;
+	color: #fff;
+}
+
+.fw-le-btn--primary:hover:not([disabled]) {
+	background: #3d7bf0;
+}
+
+.fw-le-btn[disabled] {
+	opacity: .45;
+	cursor: not-allowed;
+}
+
+/* ---- Canvas / iframe ------------------------------------------------------ */
+
+.fw-le-canvas {
+	flex: 1 1 auto;
+	position: relative;
+	overflow: hidden;
+	background: #2a2c34;
+}
+
+.fw-le-frame {
+	display: block;
+	width: 100%;
+	height: 100%;
+	border: 0;
+	background: #fff;
+}
