@@ -37,6 +37,12 @@ $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_p
 		/* translators: %s: page title being edited */
 		echo esc_html( sprintf( __( 'Live Editor — %s', 'fw' ), get_the_title( $fw_le_post ) ) );
 	?></title>
+	<?php
+	// The framework's options runtime (fw.js) calls `ajaxurl` when rendering option
+	// HTML — a global that only exists in wp-admin. Define it before any framework
+	// script runs so the options modal works on this front-end shell.
+	?>
+	<script>window.ajaxurl = window.ajaxurl || <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;</script>
 	<?php wp_head(); ?>
 </head>
 <body class="fw-live-editor-shell">

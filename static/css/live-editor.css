@@ -108,6 +108,14 @@ body.fw-live-editor-shell {
 	background: #2ea066;
 }
 
+/* Selected-item readout (populated on select). */
+.fw-le-selected {
+	font-size: 12px;
+	font-weight: 600;
+	color: #9fc0ff;
+	letter-spacing: .2px;
+}
+
 /* ---- Buttons -------------------------------------------------------------- */
 
 .fw-le-btn {

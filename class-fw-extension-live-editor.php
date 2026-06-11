@@ -43,6 +43,28 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// and on the wp-admin post-edit screen, so it is registered unconditionally.
 		add_action( 'admin_bar_menu', array( $this, '_action_admin_bar_menu' ), 90 );
 
+		// --- AJAX (admin-ajax.php runs in is_admin() context). ---
+		add_action( 'wp_ajax_fw_live_editor_item_options', array( $this, '_ajax_item_options' ) );
+		add_action( 'wp_ajax_fw_live_editor_render_item', array( $this, '_ajax_render_item' ) );
+		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
+
+		// --- Edit-mode render filters. ---
+		// These act inside the iframe (frame request) AND during the single-item
+		// render AJAX (force_edit_render) — the latter happens under admin-ajax,
+		// i.e. is_admin() === true — so they are registered unconditionally and
+		// gate themselves via is_edit_render().
+		//
+		// 1. Force wrapper-less leaves (e.g. text-block, which skips its wrapper
+		//    unless it has a css_id/class) to always render a wrapper in edit mode,
+		//    so every item has an element to stamp. sc_needs_wrapper() only consults
+		//    this filter when it would otherwise return false, so styled items are
+		//    unaffected.
+		add_filter( 'sc_needs_wrapper', array( $this, '_filter_force_wrapper' ), 999 );
+		// 2. Stamp each rendered wrapper with its builder unique_id. The item's TYPE
+		//    is resolved client-side from the model, so the HTML only needs the id —
+		//    no extra DOM, so the column grid / section layout is intact.
+		add_filter( 'sc_build_wrapper_attr', array( $this, '_filter_stamp_item_id' ), 999, 2 );
+
 		if ( ! is_admin() ) {
 			add_filter( 'template_include', array( $this, '_filter_template_include' ), 999 );
 			add_action( 'wp_enqueue_scripts', array( $this, '_action_enqueue_assets' ) );
@@ -51,6 +73,44 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// editor provides its own toolbar and the bar only adds clutter / height.
 			add_filter( 'show_admin_bar', array( $this, '_filter_show_admin_bar' ), 99 );
 		}
+	}
+
+	/**
+	 * Edit-render mode = either we're rendering the live canvas (inside the
+	 * iframe) or we're rendering a single item for the re-render AJAX.
+	 *
+	 * @return bool
+	 */
+	private function is_edit_render() {
+		return $this->force_edit_render || $this->is_frame_request();
+	}
+
+	/** @var bool set true around the single-item render AJAX */
+	private $force_edit_render = false;
+
+	/**
+	 * @param bool $needs
+	 *
+	 * @return bool
+	 * @internal
+	 */
+	public function _filter_force_wrapper( $needs ) {
+		return $this->is_edit_render() ? true : $needs;
+	}
+
+	/**
+	 * @param array $attr  wrapper HTML attributes being assembled
+	 * @param array $atts  the shortcode/item attributes (carry unique_id)
+	 *
+	 * @return array
+	 * @internal
+	 */
+	public function _filter_stamp_item_id( $attr, $atts ) {
+		if ( $this->is_edit_render() && ! empty( $atts['unique_id'] ) ) {
+			$attr['data-fw-item-id'] = $atts['unique_id'];
+		}
+
+		return $attr;
 	}
 
 	/**
@@ -83,11 +143,27 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * Is the current request the document rendered INSIDE the iframe (the live
 	 * canvas)? Same guards as the shell, but keyed on the frame query var.
 	 *
+	 * Memoized: the stamping filters call this once per rendered shortcode, and
+	 * the underlying is_builder_post() check hits the DB — so resolve it once the
+	 * main query is available, then reuse.
+	 *
 	 * @return bool
 	 */
 	private function is_frame_request() {
-		return $this->request_targets_editable_builder_post( $this->frame_query_var );
+		if ( null !== $this->frame_mode_cache ) {
+			return $this->frame_mode_cache;
+		}
+
+		// Don't cache a premature "false" before the main query has run.
+		if ( ! did_action( 'wp' ) ) {
+			return false;
+		}
+
+		return $this->frame_mode_cache = $this->request_targets_editable_builder_post( $this->frame_query_var );
 	}
+
+	/** @var bool|null memoized result of is_frame_request() */
+	private $frame_mode_cache = null;
 
 	/**
 	 * @param string $query_var
@@ -249,6 +325,19 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		$ver  = $this->manifest->get_version();
 		$post = get_queried_object();
 
+		// Bring the framework's options-editing runtime (fw.OptionsModal + every
+		// option-type's JS/CSS) onto this front-end editor shell. The backend
+		// component registers/enqueues that runtime only during admin_enqueue_scripts;
+		// this shell is a dedicated editor document we render in place of the theme
+		// and fully own, so we satisfy that one timing guard, then reuse the exact
+		// same loader the page-builder uses on the post-edit screen.
+		$this->enqueue_options_runtime();
+
+		// Deliberately do NOT depend on the framework options runtime here: if any
+		// runtime handle failed to load, WordPress would drop a dependent script,
+		// taking the editor's connect/selection logic down with it. The shell only
+		// needs jQuery + dashicons; fw.OptionsModal is loaded separately (below) and
+		// checked lazily when the user actually opens an item to edit.
 		wp_enqueue_style(
 			'fw-live-editor',
 			fw_min_uri( $this->get_declared_URI( '/static/css/live-editor.css' ) ),
@@ -272,6 +361,20 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'exitUrl'  => get_permalink( $post->ID ),
 			'ajaxUrl'  => admin_url( 'admin-ajax.php' ),
 			'nonce'    => wp_create_nonce( 'fw-live-editor:' . $post->ID ),
+			'actions'  => array(
+				'itemOptions' => 'fw_live_editor_item_options',
+				'renderItem'  => 'fw_live_editor_render_item',
+				'save'        => 'fw_live_editor_save',
+			),
+			// Server-side diagnostic: did WordPress actually enqueue the options
+			// runtime on this shell? If these are false, the core
+			// `fw:backend:enqueue-options-on-frontend` filter isn't taking effect
+			// (e.g. a stale cached backend.php), so the modal can't load.
+			'runtime'  => array(
+				'fw'             => wp_script_is( 'fw', 'enqueued' ),
+				'backendOptions' => wp_script_is( 'fw-backend-options', 'enqueued' ),
+				'filterCanLoad'  => (bool) apply_filters( 'fw:backend:enqueue-options-on-frontend', false ),
+			),
 			// The single source of truth: the same builder JSON the classic
 			// backend builder stores. Later phases edit this in place and save
 			// it back to the page-builder post option.
@@ -279,13 +382,112 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'json' => isset( $builder_data['json'] ) ? $builder_data['json'] : '[]',
 			),
 			'l10n'     => array(
-				'title'      => __( 'Live Editor', 'fw' ),
-				'save'       => __( 'Save', 'fw' ),
-				'exit'       => __( 'Exit', 'fw' ),
-				'connecting' => __( 'Connecting…', 'fw' ),
-				'ready'      => __( 'Ready', 'fw' ),
+				'title'       => __( 'Live Editor', 'fw' ),
+				'save'        => __( 'Save', 'fw' ),
+				'exit'        => __( 'Exit', 'fw' ),
+				'connecting'  => __( 'Connecting…', 'fw' ),
+				'ready'       => __( 'Ready', 'fw' ),
+				'unsaved'     => __( 'Unsaved changes', 'fw' ),
+				'saving'      => __( 'Saving…', 'fw' ),
+				'saved'       => __( 'Saved', 'fw' ),
+				'saveError'   => __( 'Save failed', 'fw' ),
+				'confirmExit' => __( 'You have unsaved changes. Leave anyway?', 'fw' ),
 			),
 		) );
+	}
+
+	/**
+	 * Load the backend options runtime + every shortcode option-type's static
+	 * assets onto the shell.
+	 *
+	 * The framework's backend component registers its options runtime (fw /
+	 * fw.OptionsModal / fw-backend-options / the reactive-option scripts) only in
+	 * wp-admin. We opt this single front-end request in via the framework's
+	 * `fw:backend:enqueue-options-on-frontend` filter, then reuse the framework's
+	 * own loader — so the exact set of handles always matches the installed
+	 * framework version (no hand-maintained copy to drift out of date).
+	 */
+	private function enqueue_options_runtime() {
+		// Tell the framework to register/enqueue its backend options runtime on
+		// this front-end request (only honored during wp_enqueue_scripts).
+		add_filter( 'fw:backend:enqueue-options-on-frontend', '__return_true' );
+
+		// CRITICAL: the framework runtime hard-depends on WordPress *core admin*
+		// script handles that aren't registered on the front end of this site
+		// (verified: postbox / wp-color-picker / iris all unregistered). When a
+		// script has an unregistered dependency, WordPress silently refuses to
+		// print the WHOLE dependent chain — so fw-backend-options → fw →
+		// fw.OptionsModal never reach the page. Register the missing core handles
+		// (from their core paths) BEFORE the framework loader enqueues anything,
+		// so the dependency chain resolves and `fw` is actually emitted.
+		$this->ensure_core_script( 'jquery-touch-punch', 'js/jquery/jquery.ui.touch-punch.js' );
+		$this->ensure_core_script( 'iris', 'js/iris.min.js', array( 'jquery-ui-draggable', 'jquery-ui-slider', 'jquery-touch-punch' ) );
+		$this->ensure_core_script( 'wp-color-picker', 'js/color-picker.min.js', array( 'iris', 'wp-i18n' ) );
+		$this->ensure_core_script( 'postbox', 'js/postbox.min.js', array( 'jquery-ui-sortable', 'wp-a11y' ) );
+		if ( ! wp_style_is( 'wp-color-picker', 'registered' ) ) {
+			wp_register_style( 'wp-color-picker', admin_url( 'css/color-picker.min.css' ), array(), false );
+		}
+
+		$this->load_shortcodes();
+
+		// Same loader the page-builder uses on the post-edit screen: enqueues the
+		// base runtime + every shortcode option-type's static assets.
+		if ( function_exists( 'fw_ext_shortcodes_enqueue_shortcodes_admin_scripts' ) ) {
+			fw_ext_shortcodes_enqueue_shortcodes_admin_scripts();
+		}
+
+		wp_enqueue_script( 'postbox' );        // now registered → fw chain prints
+		wp_enqueue_script( 'wp-color-picker' );
+		wp_enqueue_style( 'wp-color-picker' );
+
+		// The options modal's controls (inputs, buttons, tabs, the editor + media
+		// frame) are authored against WordPress admin base CSS, which a front-end
+		// page doesn't load. Enqueue those core admin stylesheets so the modal
+		// looks like it does in wp-admin. (Registered by core; enqueue if present.)
+		foreach ( array( 'common', 'forms', 'buttons', 'dashicons', 'editor-buttons', 'media-views', 'wp-jquery-ui-dialog' ) as $style ) {
+			if ( wp_style_is( $style, 'registered' ) ) {
+				wp_enqueue_style( $style );
+			}
+		}
+
+		// The wp-editor option type (e.g. the Text element's Content field) renders
+		// a rich editor whose client init calls the global `tinymce`/`quicktags`.
+		// Those only exist if WordPress's editor runtime is loaded on the page —
+		// which never happens on a normal front end. Enqueue it so Visual mode works.
+		if ( function_exists( 'wp_enqueue_editor' ) ) {
+			wp_enqueue_editor();
+		}
+	}
+
+	/**
+	 * Register a WordPress-core admin script handle if it's missing on the front
+	 * end. Dependencies are filtered to those actually registered, so an
+	 * unregistered sub-dependency (this site strips several core admin scripts)
+	 * can't cause WordPress to drop this handle too.
+	 *
+	 * @param string $handle
+	 * @param string $admin_rel path relative to wp-admin/
+	 * @param array  $deps
+	 */
+	private function ensure_core_script( $handle, $admin_rel, $deps = array() ) {
+		if ( wp_script_is( $handle, 'registered' ) ) {
+			return;
+		}
+		$deps = array_values( array_filter( $deps, function ( $d ) {
+			return wp_script_is( $d, 'registered' );
+		} ) );
+		wp_register_script( $handle, admin_url( $admin_rel ), $deps, false, true );
+	}
+
+	/**
+	 * Ensure the shortcode definitions (and their option types) are loaded —
+	 * needed before reading a shortcode's options or rendering an item.
+	 */
+	private function load_shortcodes() {
+		$sc = fw_ext( 'shortcodes' );
+		if ( $sc && method_exists( $sc, 'load_shortcodes' ) ) {
+			$sc->load_shortcodes();
+		}
 	}
 
 	/**
@@ -346,5 +548,176 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		return $show;
+	}
+
+	/* ---------------------------------------------------------------------
+	 * Phase 2 — AJAX: per-item options + single-item re-render
+	 * ------------------------------------------------------------------- */
+
+	/**
+	 * Shared guard for the editor AJAX endpoints: a valid nonce + edit_post cap
+	 * on the targeted post. Sends a JSON error and exits on failure.
+	 *
+	 * @return int validated post id
+	 */
+	private function verify_ajax() {
+		$post_id = (int) FW_Request::POST( 'post_id' );
+		$nonce   = (string) FW_Request::POST( 'nonce' );
+
+		if (
+			! $post_id
+			|| ! wp_verify_nonce( $nonce, 'fw-live-editor:' . $post_id )
+			|| ! current_user_can( 'edit_post', $post_id )
+		) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'fw' ) ), 403 );
+		}
+
+		return $post_id;
+	}
+
+	/**
+	 * Return the option definitions for an item's shortcode, so the shell can
+	 * seed fw.OptionsModal. POST: post_id, nonce, tag (shortcode tag — for
+	 * containers that's "section"/"column"/a section-like type).
+	 *
+	 * @internal
+	 */
+	public function _ajax_item_options() {
+		$this->verify_ajax();
+
+		$tag = (string) FW_Request::POST( 'tag' );
+
+		$this->load_shortcodes();
+
+		$shortcodes_ext = fw_ext( 'shortcodes' );
+		$shortcode      = $shortcodes_ext ? $shortcodes_ext->get_shortcode( $tag ) : null;
+
+		if ( ! $shortcode ) {
+			wp_send_json_error( array( 'message' => sprintf( __( 'Unknown item type: %s', 'fw' ), $tag ) ) );
+		}
+
+		// Feed fw.OptionsModal the same shape the classic builder does: options
+		// transformed into an ordered list (each { id => option }). For leaf
+		// "simple" shortcodes get_shortcode_builder_data() also yields a nice
+		// title; section/column don't go through that path, so fall back.
+		$title       = $tag;
+		$builder_row = method_exists( $shortcodes_ext, 'get_shortcode_builder_data' )
+			? $shortcodes_ext->get_shortcode_builder_data( $tag )
+			: null;
+		if ( is_array( $builder_row ) && ! empty( $builder_row['title'] ) ) {
+			$title = $builder_row['title'];
+		}
+
+		wp_send_json_success( array(
+			'tag'     => $tag,
+			'title'   => $title,
+			'options' => $this->transform_options_for_modal( (array) $shortcode->get_options() ),
+		) );
+	}
+
+	/**
+	 * Mirror of FW_Extension_Shortcodes::transform_options(): wrap each option in
+	 * a single-key array so order is preserved through JSON, exactly as the
+	 * classic builder feeds fw.OptionsModal.
+	 *
+	 * @param array $options
+	 *
+	 * @return array
+	 */
+	private function transform_options_for_modal( array $options ) {
+		$out = array();
+		foreach ( $options as $id => $option ) {
+			$out[] = is_int( $id ) ? $option : array( $id => $option );
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Re-render a single builder item subtree to its front-end HTML. POST:
+	 * post_id, nonce, item (JSON of one node: {type, shortcode, atts, _items, …}).
+	 * Correction (auto section/row/column wrapping) is disabled so exactly the
+	 * one item is produced, and the edit-render filters stamp it with its id.
+	 *
+	 * @internal
+	 */
+	public function _ajax_render_item() {
+		$post_id = $this->verify_ajax();
+
+		$item = json_decode( (string) FW_Request::POST( 'item' ), true );
+
+		if ( ! is_array( $item ) || empty( $item['type'] ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid item.', 'fw' ) ) );
+		}
+
+		$this->load_shortcodes();
+
+		// Some shortcodes read the global $post; set it up for the render.
+		global $post;
+		$post = get_post( $post_id );
+		if ( $post ) {
+			setup_postdata( $post );
+		}
+
+		$this->force_edit_render = true;
+		add_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+
+		/** @var FW_Option_Type_Page_Builder $option_type */
+		$option_type = fw()->backend->option_type( 'page-builder' );
+		$shortcodes  = $option_type->json_to_shortcodes( array( $item ) );
+		$html        = is_string( $shortcodes ) ? do_shortcode( $shortcodes ) : '';
+
+		remove_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+		$this->force_edit_render = false;
+		wp_reset_postdata();
+
+		wp_send_json_success( array(
+			'id'   => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
+			'html' => $html,
+		) );
+	}
+
+	/**
+	 * Persist the edited builder tree. POST: post_id, nonce, json (the full
+	 * builder tree as a JSON array string — the same value the classic backend
+	 * builder stores).
+	 *
+	 * This writes through the page-builder option exactly like the classic
+	 * builder: fw_set_db_post_option() routes the value through the option type's
+	 * storage_save (which re-encodes each item's atts via its item type — the
+	 * symmetric inverse of the storage_load that produced our model) and then
+	 * fires `fw_post_options_update`, which the page-builder extension hooks to
+	 * regenerate the post_content shortcodes. So no manual meta writes and no
+	 * content regeneration of our own — the framework does both correctly.
+	 *
+	 * @internal
+	 */
+	public function _ajax_save() {
+		$post_id = $this->verify_ajax();
+
+		$json    = (string) FW_Request::POST( 'json' );
+		$decoded = json_decode( $json, true );
+
+		// Must decode to an array of items; refuse anything else so a malformed
+		// payload can never blank out the page.
+		if ( ! is_array( $decoded ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid builder data.', 'fw' ) ) );
+		}
+
+		$this->load_shortcodes();
+
+		// Preserve the existing builder_active flag (true for any builder page —
+		// which this must be, since the editor only opens on builder posts).
+		$current = fw_get_db_post_option( $post_id, $this->pb()->get_option_key() );
+		$active  = ( is_array( $current ) && isset( $current['builder_active'] ) )
+			? (bool) $current['builder_active']
+			: true;
+
+		fw_set_db_post_option( $post_id, $this->pb()->get_option_key(), array(
+			'json'           => $json,
+			'builder_active' => $active,
+		) );
+
+		wp_send_json_success( array( 'saved' => true ) );
 	}
 }
