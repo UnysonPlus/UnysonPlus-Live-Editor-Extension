@@ -65,6 +65,12 @@ $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_p
 			</div>
 
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--right">
+				<button type="button" id="fw-le-undo" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Undo (Ctrl+Z)', 'fw' ); ?>" disabled>
+					<span class="dashicons dashicons-undo"></span>
+				</button>
+				<button type="button" id="fw-le-redo" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Redo (Ctrl+Y)', 'fw' ); ?>" disabled>
+					<span class="dashicons dashicons-redo"></span>
+				</button>
 				<button type="button" id="fw-le-exit" class="fw-le-btn fw-le-btn--ghost">
 					<span class="dashicons dashicons-no-alt"></span>
 					<?php echo esc_html__( 'Exit', 'fw' ); ?>

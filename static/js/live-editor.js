@@ -18,6 +18,7 @@
 	var cfg   = window._fwLiveEditor || {};
 	var NS    = 'fw-live-editor';
 	var DEBUG = true;
+	var HISTORY_MAX = 60;
 
 	var LEAF_LABELS = {
 		text_block:      'Text',
@@ -135,6 +136,8 @@
 		dirty: false,
 		modal: null,
 		renderTimers: {},
+		undoStack: [],
+		redoStack: [],
 		$: {},
 
 		log: function () {
@@ -150,6 +153,8 @@
 			this.$.status = $( '#fw-le-status' );
 			this.$.exit   = $( '#fw-le-exit' );
 			this.$.save   = $( '#fw-le-save' );
+			this.$.undo   = $( '#fw-le-undo' );
+			this.$.redo   = $( '#fw-le-redo' );
 
 			this.log( 'init', {
 				hasFrame:        this.$.frame.length > 0,
@@ -162,10 +167,14 @@
 
 			this.$.exit.on( 'click', this.onExit.bind( this ) );
 			this.$.save.on( 'click', this.onSave.bind( this ) );
+			this.$.undo.on( 'click', this.undo.bind( this ) );
+			this.$.redo.on( 'click', this.redo.bind( this ) );
 			this.buildIndex( this.model, null );
 			this.buildPanel();
+			this.refreshUndoRedo();
 
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
+			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
 
 			this.setStatus( 'connecting', ( cfg.l10n && cfg.l10n.connecting ) || 'Connecting…' );
 		},
@@ -255,6 +264,12 @@
 					break;
 				case 'open-structure-picker':
 					this.openStructurePicker();
+					break;
+				case 'undo':
+					this.undo();
+					break;
+				case 'redo':
+					this.redo();
 					break;
 				default:
 					break;
@@ -361,6 +376,7 @@
 					var bi = node._items.indexOf( self.index[ payload.beforeId ].node );
 					if ( bi >= 0 ) { insertAt = bi; }
 				}
+				self.recordHistory();
 				node._items.splice( insertAt, 0, item );
 
 				self.rebuildIndex();
@@ -475,6 +491,7 @@
 				var prevLast = self.model.length ? self.model[ self.model.length - 1 ] : null;
 				var afterId  = prevLast ? ( ( prevLast.atts && prevLast.atts.unique_id ) || prevLast.unique_id ) : null;
 
+				self.recordHistory();
 				self.model.push( item );
 				self.rebuildIndex();
 				self.markDirty();
@@ -555,6 +572,7 @@
 				var col = resp.data.item;
 				col.width = width;
 				var newColId = ( col.atts && col.atts.unique_id ) || col.unique_id;
+				self.recordHistory();
 				columnArrayOf( section ).push( col );
 
 				self.rebuildIndex();
@@ -653,6 +671,7 @@
 			if ( ! node ) { return; }
 			if ( ! node.atts ) { node.atts = {}; }
 			if ( node.atts.text === payload.text ) { return; } // no change
+			this.recordHistory();
 			node.atts.text = payload.text;
 			this.markDirty();
 		},
@@ -664,6 +683,7 @@
 			payload = payload || {};
 			var node = this.nodeOf( payload.id );
 			if ( ! node || ! payload.width ) { return; }
+			this.recordHistory();
 			node.width = payload.width;
 
 			if ( payload.siblingId && payload.siblingWidth ) {
@@ -758,6 +778,7 @@
 
 			var clone   = this.cloneWithNewIds( entry.node );
 			var cloneId = ( clone.atts && clone.atts.unique_id ) || clone.unique_id;
+			this.recordHistory();
 			siblings.splice( pos + 1, 0, clone );
 
 			this.rebuildIndex();
@@ -780,6 +801,7 @@
 
 			var pos = entry.siblings.indexOf( entry.node );
 			if ( pos < 0 ) { return; }
+			this.recordHistory();
 			entry.siblings.splice( pos, 1 );
 
 			this.rebuildIndex();
@@ -823,6 +845,7 @@
 				insertAt = targetSiblings.length;
 			}
 
+			var snap = this.snapshot(); // pre-mutation, committed only on a real move
 			oldSiblings.splice( from, 1 );
 			if ( sameContainer && insertAt > from ) { insertAt--; }
 			if ( sameContainer && insertAt === from ) {
@@ -830,6 +853,7 @@
 				return;
 			}
 
+			this.recordHistory( snap );
 			targetSiblings.splice( insertAt, 0, node );
 
 			this.rebuildIndex();
@@ -889,7 +913,13 @@
 						size:    isContainer( node ) ? 'large' : 'medium'
 					} );
 
+					// One undo entry per edit session: snapshot the pre-edit model
+					// now, and commit it to history only on the first real change.
+					var preState = self.snapshot();
+					var recorded = false;
+
 					self.modal.on( 'change:values', function ( modal, values ) {
+						if ( ! recorded ) { self.recordHistory( preState ); recorded = true; }
 						node.atts = $.extend( {}, node.atts, values );
 						self.markDirty();
 						self.renderItem( id );
@@ -945,6 +975,76 @@
 			}, data ) ).done( cb ).fail( function ( xhr ) {
 				window.console && console.error( '[fw-le-shell] ajax error', action, xhr && xhr.status );
 			} );
+		},
+
+		/* ---- undo / redo ----------------------------------------------- */
+
+		/** A deep, detached copy of the current model (the unit of history). */
+		snapshot: function () {
+			return JSON.parse( JSON.stringify( this.model ) );
+		},
+
+		/** Push a pre-mutation model state onto the undo stack (capping its size)
+		 *  and clear the redo stack. Pass an explicit snapshot, or omit to capture
+		 *  the current model now (call BEFORE the mutation). */
+		recordHistory: function ( state ) {
+			this.undoStack.push( state || this.snapshot() );
+			if ( this.undoStack.length > HISTORY_MAX ) { this.undoStack.shift(); }
+			this.redoStack.length = 0;
+			this.refreshUndoRedo();
+		},
+
+		undo: function () {
+			if ( ! this.undoStack.length ) { return; }
+			this.redoStack.push( this.snapshot() );
+			this.model = this.undoStack.pop();
+			this.afterHistoryRestore();
+		},
+
+		redo: function () {
+			if ( ! this.redoStack.length ) { return; }
+			this.undoStack.push( this.snapshot() );
+			this.model = this.redoStack.pop();
+			this.afterHistoryRestore();
+		},
+
+		/** Rebuild index + re-render the whole canvas from the restored model. */
+		afterHistoryRestore: function () {
+			if ( this.modal ) { try { this.modal.close(); } catch ( e ) {} this.modal = null; }
+			this.rebuildIndex();
+			this.markDirty();
+			this.refreshUndoRedo();
+			this.renderPageToCanvas();
+		},
+
+		/** Server-render the entire model and swap it into the canvas wholesale —
+		 *  the robust way to reflect an undo/redo regardless of which granular DOM
+		 *  ops produced the change. */
+		renderPageToCanvas: function () {
+			var self = this;
+			this.ajax( cfg.actions.renderPage, { json: JSON.stringify( this.model ) }, function ( r ) {
+				if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+					self.syncFrameModel();
+					self.toFrame( 'render-page', { html: r.data.html } );
+				} else {
+					window.console && console.error( '[fw-le-shell] render-page failed', r );
+				}
+			} );
+		},
+
+		refreshUndoRedo: function () {
+			if ( this.$.undo ) { this.$.undo.prop( 'disabled', ! this.undoStack.length ); }
+			if ( this.$.redo ) { this.$.redo.prop( 'disabled', ! this.redoStack.length ); }
+		},
+
+		onKeydown: function ( e ) {
+			if ( ! ( e.ctrlKey || e.metaKey ) ) { return; }
+			// Let form fields (e.g. the options modal) keep their native undo.
+			var t = e.target, tag = t && t.tagName;
+			if ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) ) { return; }
+			var k = ( e.key || '' ).toLowerCase();
+			if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); this.undo(); }
+			else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); this.redo(); }
 		},
 
 		markDirty: function () {

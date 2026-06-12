@@ -164,6 +164,19 @@ body.fw-live-editor-shell {
 	cursor: not-allowed;
 }
 
+/* Icon-only buttons (undo / redo). */
+.fw-le-btn--icon {
+	padding: 0;
+	width: 32px;
+	justify-content: center;
+}
+
+.fw-le-btn--icon .dashicons {
+	font-size: 18px;
+	width: 18px;
+	height: 18px;
+}
+
 /* ---- Canvas / iframe ------------------------------------------------------ */
 
 .fw-le-canvas {

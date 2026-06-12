@@ -49,6 +49,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_new_item', array( $this, '_ajax_new_item' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_section', array( $this, '_ajax_new_section' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_column', array( $this, '_ajax_new_column' ) );
+		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 
 		// --- Edit-mode render filters. ---
@@ -377,6 +378,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'newItem'     => 'fw_live_editor_new_item',
 				'newSection'  => 'fw_live_editor_new_section',
 				'newColumn'   => 'fw_live_editor_new_column',
+				'renderPage'  => 'fw_live_editor_render_page',
 				'save'        => 'fw_live_editor_save',
 			),
 			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
@@ -746,6 +748,43 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * Render the ENTIRE builder tree (all top-level items) to front-end HTML, with
+	 * structure-correction ON and the edit-render stamping. Used by undo/redo to
+	 * rebuild the whole canvas from a restored model snapshot. POST: post_id,
+	 * nonce, json (the full builder tree).
+	 *
+	 * @internal
+	 */
+	public function _ajax_render_page() {
+		$post_id = $this->verify_ajax();
+
+		$json = json_decode( (string) FW_Request::POST( 'json' ), true );
+		if ( ! is_array( $json ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid builder data.', 'fw' ) ) );
+		}
+
+		$this->load_shortcodes();
+
+		global $post;
+		$post = get_post( $post_id );
+		if ( $post ) {
+			setup_postdata( $post );
+		}
+
+		$this->force_edit_render = true;
+
+		/** @var FW_Option_Type_Page_Builder $option_type */
+		$option_type = fw()->backend->option_type( 'page-builder' );
+		$shortcodes  = $option_type->json_to_shortcodes( $json );
+		$html        = is_string( $shortcodes ) ? do_shortcode( $shortcodes ) : '';
+
+		$this->force_edit_render = false;
+		wp_reset_postdata();
+
+		wp_send_json_success( array( 'html' => $html ) );
 	}
 
 	/** Whether a builder item `type` is a section-like container (section /

@@ -201,6 +201,8 @@
 				this.insertElement( data.payload );
 			} else if ( data.type === 'insert-section' ) {
 				this.insertSection( data.payload );
+			} else if ( data.type === 'render-page' ) {
+				this.renderPage( data.payload );
 			} else if ( data.type === 'add-dragover' ) {
 				this.pointerAddOver( data.payload );
 			} else if ( data.type === 'add-drop' ) {
@@ -634,6 +636,49 @@
 			nu.scrollIntoView( { behavior: 'smooth', block: 'center' } );
 		},
 
+		/** Replace the entire builder content in the canvas with freshly-rendered
+		 *  HTML (used by undo/redo). Removes the current top-level sections + the
+		 *  editor's add-section zone, inserts the new sections in their place, and
+		 *  re-runs the editor decorations. The shell sends `sync-model` first, so
+		 *  the index already matches the new HTML's item ids. */
+		renderPage: function ( payload ) {
+			if ( ! payload || typeof payload.html !== 'string' ) { return; }
+			var container = this.findSectionsContainer();
+			if ( ! container ) { this.log( 'render-page: no container' ); return; }
+
+			var tmp = document.createElement( 'div' );
+			tmp.innerHTML = payload.html.trim();
+			var newNodes = Array.prototype.slice.call( tmp.children );
+
+			// Insertion anchor = whatever currently precedes the first section, so
+			// new content lands in the same spot even if the container holds more
+			// than just builder sections.
+			var kids = Array.prototype.slice.call( container.children );
+			var firstSection = null;
+			for ( var i = 0; i < kids.length; i++ ) {
+				if ( kids[ i ].hasAttribute && kids[ i ].hasAttribute( 'data-fw-item-id' ) ) { firstSection = kids[ i ]; break; }
+			}
+			var anchorPrev = firstSection ? firstSection.previousSibling : null;
+
+			// Remove the old sections + the editor's add-section zone.
+			kids.forEach( function ( c ) {
+				if ( c.classList && c.classList.contains( 'fw-le-add-section-zone' ) ) { c.parentNode.removeChild( c ); return; }
+				if ( c.hasAttribute && c.hasAttribute( 'data-fw-item-id' ) ) { c.parentNode.removeChild( c ); }
+			} );
+
+			this.els.addZone = null;
+			this.clearSelection();
+			this.hoverEl = null;
+			if ( this.els.hoverBox ) { this.els.hoverBox.style.display = 'none'; }
+
+			var ref = anchorPrev ? anchorPrev.nextSibling : container.firstChild;
+			newNodes.forEach( function ( n ) { container.insertBefore( n, ref ); } );
+
+			this.markEmptyColumns();
+			this.ensureSectionAddColZones();
+			this.ensureAddSectionZone();
+		},
+
 		/** The element that holds top-level sections. Prefer the page-builder
 		 *  content wrapper; else fall back to the parent of any indexed top-level
 		 *  section already in the DOM. */
@@ -1008,6 +1053,16 @@
 			};
 			window.addEventListener( 'scroll', reflow, true );
 			window.addEventListener( 'resize', reflow, false );
+
+			// Relay undo/redo keys to the shell — but not while inline-editing text,
+			// where Ctrl+Z should do the browser's native text undo.
+			document.addEventListener( 'keydown', function ( e ) {
+				if ( self.editing ) { return; }
+				if ( ! ( e.ctrlKey || e.metaKey ) ) { return; }
+				var k = ( e.key || '' ).toLowerCase();
+				if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); self.toShell( 'undo', {} ); }
+				else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); self.toShell( 'redo', {} ); }
+			}, false );
 			// Drag-to-add uses the shell's pointer-capture relay (add-dragover /
 			// add-drop messages → pointerAddOver / pointerAddDrop), not native DnD,
 			// since native HTML5 DnD can't reliably cross the same-origin iframe.
