@@ -47,6 +47,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_item_options', array( $this, '_ajax_item_options' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_item', array( $this, '_ajax_render_item' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_item', array( $this, '_ajax_new_item' ) );
+		add_action( 'wp_ajax_fw_live_editor_new_section', array( $this, '_ajax_new_section' ) );
+		add_action( 'wp_ajax_fw_live_editor_new_column', array( $this, '_ajax_new_column' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 
 		// --- Edit-mode render filters. ---
@@ -373,10 +375,15 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'itemOptions' => 'fw_live_editor_item_options',
 				'renderItem'  => 'fw_live_editor_render_item',
 				'newItem'     => 'fw_live_editor_new_item',
+				'newSection'  => 'fw_live_editor_new_section',
+				'newColumn'   => 'fw_live_editor_new_column',
 				'save'        => 'fw_live_editor_save',
 			),
 			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
 			'elements' => $this->get_insertable_elements(),
+			// Section types available for the structure picker (only those whose
+			// shortcode is actually registered).
+			'sectionTypes' => $this->get_section_types(),
 			// Server-side diagnostic: did WordPress actually enqueue the options
 			// runtime on this shell? If these are false, the core
 			// `fw:backend:enqueue-options-on-frontend` filter isn't taking effect
@@ -406,6 +413,12 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'add'         => __( 'Add', 'fw' ),
 				'addElement'  => __( 'Add Element', 'fw' ),
 				'search'      => __( 'Search…', 'fw' ),
+				'addSection'  => __( 'Section', 'fw' ),
+				'structure'   => __( 'Choose a structure', 'fw' ),
+				'sectionType' => __( 'Section type', 'fw' ),
+				'addColumn'   => __( 'Add Column', 'fw' ),
+				'firstSection' => __( 'Add your first section', 'fw' ),
+				'addSectionHere' => __( 'Add Section', 'fw' ),
 			),
 		) );
 	}
@@ -564,6 +577,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 
 		wp_localize_script( 'fw-live-editor-frame', '_fwLiveEditorFrame', array(
 			'postId' => (int) get_queried_object_id(),
+			'l10n'   => array(
+				'firstSection'   => __( 'Add your first section', 'fw' ),
+				'addSectionHere' => __( 'Add Section', 'fw' ),
+				'addColumn'      => __( 'Add Column', 'fw' ),
+			),
 		) );
 	}
 
@@ -699,12 +717,42 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			wp_send_json_error( array( 'message' => __( 'Invalid item.', 'fw' ) ) );
 		}
 
-		$html = $this->render_item_html( $item, $post_id );
+		// A section re-render (e.g. after adding/rebalancing a column) needs
+		// structure-correction ON so its columns are wrapped in a row; a leaf or a
+		// lone column renders exactly as given.
+		$html = $this->render_item_html( $item, $post_id, ! $this->is_section_type( $item['type'] ) );
 
 		wp_send_json_success( array(
 			'id'   => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
 			'html' => $html,
 		) );
+	}
+
+	/** The section types offered in the structure picker — filtered to those whose
+	 *  shortcode is registered (Bleed/Masonry ship in the shortcodes extension but
+	 *  could be absent in a trimmed install). */
+	private function get_section_types() {
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+		$out = array();
+		$candidates = array(
+			'section'         => __( 'Standard', 'fw' ),
+			'bleed_section'   => __( 'Bleed', 'fw' ),
+			'masonry_section' => __( 'Masonry', 'fw' ),
+		);
+		foreach ( $candidates as $tag => $title ) {
+			if ( $sc && $sc->get_shortcode( $tag ) ) {
+				$out[] = array( 'id' => $tag, 'title' => $title );
+			}
+		}
+		return $out;
+	}
+
+	/** Whether a builder item `type` is a section-like container (section /
+	 *  bleed_section / masonry_section / any *section). */
+	private function is_section_type( $type ) {
+		$type = (string) $type;
+		return $type === 'section' || substr( $type, -7 ) === 'section';
 	}
 
 	/**
@@ -717,7 +765,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 *
 	 * @return string
 	 */
-	private function render_item_html( $item, $post_id ) {
+	private function render_item_html( $item, $post_id, $disable_correction = true ) {
 		$this->load_shortcodes();
 
 		// Some shortcodes read the global $post; set it up for the render.
@@ -728,14 +776,21 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		$this->force_edit_render = true;
-		add_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+		// Leaves/columns render exactly as given (no auto section/row/column
+		// wrapping). A section, however, needs correction so its columns get
+		// wrapped in a row for the flex grid — so callers can opt back in.
+		if ( $disable_correction ) {
+			add_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+		}
 
 		/** @var FW_Option_Type_Page_Builder $option_type */
 		$option_type = fw()->backend->option_type( 'page-builder' );
 		$shortcodes  = $option_type->json_to_shortcodes( array( $item ) );
 		$html        = is_string( $shortcodes ) ? do_shortcode( $shortcodes ) : '';
 
-		remove_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+		if ( $disable_correction ) {
+			remove_filter( 'fw:ext:page-builder:json-structure-needs-correction', '__return_false' );
+		}
 		$this->force_edit_render = false;
 		wp_reset_postdata();
 
@@ -820,6 +875,123 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'item' => $item,
 			'html' => $this->render_item_html( $item, $post_id ),
 		) );
+	}
+
+	/**
+	 * Build a fresh, empty section (one full-width column) for the canvas.
+	 *
+	 * Unlike a leaf element, a section is a structural container: its default
+	 * atts come from the `section` shortcode's options and it carries one
+	 * `column` (width `1_1`) with an empty `_items`. The HTML is rendered with
+	 * the structure-correction filter LEFT ON so the lone column is wrapped in a
+	 * row for the flex grid (exactly how the page renders a section), and so each
+	 * container gets its data-fw-item-id stamp. The shell appends the returned
+	 * item to the top-level model and drops the HTML at the end of the page.
+	 *
+	 * @internal
+	 */
+	public function _ajax_new_section() {
+		$post_id = $this->verify_ajax();
+
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+
+		if ( ! $sc ) {
+			wp_send_json_error( array( 'message' => __( 'Shortcodes unavailable.', 'fw' ) ) );
+		}
+
+		// Section type: Standard / Bleed / Masonry. The shortcode tag === the
+		// builder item type for each. Anything else falls back to Standard.
+		$type    = (string) FW_Request::POST( 'section_type', 'section' );
+		$allowed = array( 'section', 'bleed_section', 'masonry_section' );
+		if ( ! in_array( $type, $allowed, true ) ) {
+			$type = 'section';
+		}
+
+		// Column structure: an array of width fraction ids (e.g. ['1_2','1_2']).
+		$cols = FW_Request::POST( 'cols' );
+		if ( is_string( $cols ) ) {
+			$cols = json_decode( $cols, true );
+		}
+		if ( ! is_array( $cols ) || empty( $cols ) ) {
+			$cols = array( '1_1' );
+		}
+
+		$section_atts = $this->default_atts( $sc, $type );
+		$section_atts['unique_id'] = fw_rand_md5();
+
+		$valid_widths = fw_ext_builder_get_item_width( 'column' ); // id => data
+		$items        = array();
+		foreach ( $cols as $w ) {
+			$w = is_string( $w ) ? $w : '1_1';
+			if ( ! isset( $valid_widths[ $w ] ) ) {
+				$w = '1_1';
+			}
+			$items[] = $this->build_column_item( $sc, $w );
+		}
+
+		$item = array(
+			'type'   => $type,
+			'atts'   => $section_atts,
+			'_items' => $items,
+		);
+
+		wp_send_json_success( array(
+			'item' => $item,
+			// Keep correction ON so the columns are wrapped in a row.
+			'html' => $this->render_item_html( $item, $post_id, false ),
+		) );
+	}
+
+	/**
+	 * Create ONE default column item (for the "+ Column" affordance). Returns just
+	 * the item; the caller re-renders the whole section (so widths rebalance and
+	 * the row re-wraps correctly), so no standalone HTML is needed.
+	 *
+	 * @internal
+	 */
+	public function _ajax_new_column() {
+		$post_id = $this->verify_ajax();
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+
+		if ( ! $sc ) {
+			wp_send_json_error( array( 'message' => __( 'Shortcodes unavailable.', 'fw' ) ) );
+		}
+
+		wp_send_json_success( array( 'item' => $this->build_column_item( $sc, '1_1' ) ) );
+	}
+
+	/** Build a default column item (atts from the column shortcode, fresh id,
+	 *  width as a top-level key, empty children). */
+	private function build_column_item( $sc, $width ) {
+		$column_atts = $this->default_atts( $sc, 'column' );
+		// Width is a top-level key on a column item (sibling to atts), not an att.
+		unset( $column_atts['width'] );
+		$column_atts['unique_id'] = fw_rand_md5();
+
+		return array(
+			'type'   => 'column',
+			'width'  => $width,
+			'atts'   => $column_atts,
+			'_items' => array(),
+		);
+	}
+
+	/** Canonical default atts for a shortcode tag — the SAME values the classic
+	 *  builder seeds a new item with (its cached `default_values`, computed from
+	 *  the RAW options). Using `fw_extract_only_options` here instead mangles
+	 *  composite option types (e.g. the section min_height multi-picker collapses
+	 *  to its Custom 600px branch), so always prefer the builder data. */
+	private function default_atts( $sc, $tag ) {
+		if ( $sc && method_exists( $sc, 'get_shortcode_builder_data' ) ) {
+			$row = $sc->get_shortcode_builder_data( $tag );
+			if ( is_array( $row ) && isset( $row['default_values'] ) && is_array( $row['default_values'] ) ) {
+				return $row['default_values'];
+			}
+		}
+		$shortcode = $sc ? $sc->get_shortcode( $tag ) : null;
+		return $shortcode ? fw_get_options_values_from_input( $shortcode->get_options(), array() ) : array();
 	}
 
 	/**

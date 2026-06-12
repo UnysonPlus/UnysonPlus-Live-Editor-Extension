@@ -47,6 +47,55 @@
 		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
 	}
 
+	// The page-builder 12-column grid: N twelfths → { width fraction id, the
+	// frontend grid classes }. Mirrors framework/extensions/builder/config.php
+	// `grid.columns` (the integer-twelfth widths; the odd 1/5 = sm-15 is omitted
+	// so a drag snaps cleanly to 1…12).
+	var GRID = {
+		1:  { id: '1_12',  cls: 'fw-col-12 fw-col-sm-1' },
+		2:  { id: '1_6',   cls: 'fw-col-12 fw-col-sm-2' },
+		3:  { id: '1_4',   cls: 'fw-col-12 fw-col-sm-3' },
+		4:  { id: '1_3',   cls: 'fw-col-12 fw-col-sm-4' },
+		5:  { id: '5_12',  cls: 'fw-col-12 fw-col-sm-5' },
+		6:  { id: '1_2',   cls: 'fw-col-12 fw-col-sm-6' },
+		7:  { id: '7_12',  cls: 'fw-col-12 fw-col-sm-7' },
+		8:  { id: '2_3',   cls: 'fw-col-12 fw-col-sm-8' },
+		9:  { id: '3_4',   cls: 'fw-col-12 fw-col-sm-9' },
+		10: { id: '5_6',   cls: 'fw-col-12 fw-col-sm-10' },
+		11: { id: '11_12', cls: 'fw-col-12 fw-col-sm-11' },
+		12: { id: '1_1',   cls: 'fw-col-12' }
+	};
+
+	/** Human label for a twelfths value — the reduced fraction the builder uses
+	 *  (e.g. 6 → "1/2", 4 → "1/3", 8 → "2/3"), not the raw "/12" form. */
+	function fracLabel( twelfths ) {
+		var g = GRID[ twelfths ];
+		return g ? g.id.replace( '_', '/' ) : ( twelfths + '/12' );
+	}
+
+	/** Read a column element's current width in twelfths from its grid classes. */
+	function colTwelfths( el ) {
+		var cn = el.className || '';
+		var m  = cn.match( /fw-col-sm-(\d+)/ );
+		if ( m ) {
+			var n = parseInt( m[ 1 ], 10 );
+			if ( n >= 1 && n <= 12 ) { return n; }
+			if ( n === 15 ) { return 2; } // 1/5 ≈ rounds into the grid
+		}
+		return 12; // plain fw-col-12 (full) or fw-col (auto)
+	}
+
+	/** Replace a column element's grid classes with those for `twelfths` (1…12). */
+	function applyColWidth( el, twelfths ) {
+		var g = GRID[ twelfths ];
+		if ( ! g ) { return; }
+		var kept = ( el.className || '' ).split( /\s+/ ).filter( function ( c ) {
+			return c && c !== 'fw-col-12' && ! /^fw-col(-sm-\w+)?$/.test( c );
+		} );
+		g.cls.split( /\s+/ ).forEach( function ( c ) { kept.push( c ); } );
+		el.className = kept.join( ' ' );
+	}
+
 	var fwLiveEditorFrame = {
 		config: window._fwLiveEditorFrame || {},
 
@@ -131,6 +180,9 @@
 				this.buildIndex( this.model, null );
 				this.buildOverlay();
 				this.bindEvents();
+				this.markEmptyColumns();
+				this.ensureAddSectionZone();
+				this.ensureSectionAddColZones();
 				this.log( 'started; indexed', Object.keys( this.index ).length, 'items' );
 			} else if ( data.type === 'replace' ) {
 				this.replaceItem( data.payload );
@@ -141,10 +193,14 @@
 				this.model = ( data.payload && data.payload.model ) || [];
 				this.index = {};
 				this.buildIndex( this.model, null );
+				this.ensureAddSectionZone();
+				this.ensureSectionAddColZones();
 			} else if ( data.type === 'insert-after' ) {
 				this.insertAfter( data.payload );
 			} else if ( data.type === 'insert-element' ) {
 				this.insertElement( data.payload );
+			} else if ( data.type === 'insert-section' ) {
+				this.insertSection( data.payload );
 			} else if ( data.type === 'add-dragover' ) {
 				this.pointerAddOver( data.payload );
 			} else if ( data.type === 'add-drop' ) {
@@ -204,12 +260,15 @@
 			if ( this.activeEl === el || this.activeId === payload.id ) { this.clearSelection(); }
 			if ( this.hoverEl === el ) { this.hoverEl = null; this.els.hoverBox.style.display = 'none'; }
 			el.parentNode.removeChild( el );
+			this.markEmptyColumns();
+			this.ensureAddSectionZone();
 		},
 
 		clearSelection: function () {
 			this.activeEl = null;
 			this.activeId = null;
 			if ( this.els.activeBox ) { this.els.activeBox.style.display = 'none'; }
+			if ( this.els.resize ) { this.els.resize.style.display = 'none'; }
 			this.toShell( 'select', { id: null, type: null, label: '' } );
 		},
 
@@ -257,6 +316,108 @@
 
 			this.toShell( 'update-text', { id: ed.id, text: ed.el.innerHTML } );
 			this.select( ed.el, ed.id );
+		},
+
+		/* ---- column resize (drag the right edge, 12-col grid) ---------- */
+
+		startColResize: function ( e ) {
+			if ( ! this.activeEl ) { return; }
+			var meta = this.index[ this.activeId ] || {};
+			if ( meta.type !== 'column' ) { return; }
+			e.preventDefault();
+			e.stopPropagation();
+
+			var col = this.activeEl;
+			var row = col.parentNode;
+
+			// Adjacent column to the right (within the same row): it compensates so
+			// the row stays balanced (a true divider drag). None → resize alone.
+			var sib = col.nextElementSibling;
+			while ( sib && ! ( sib.nodeType === 1 && sib.hasAttribute( 'data-fw-item-id' ) &&
+				( this.index[ sib.getAttribute( 'data-fw-item-id' ) ] || {} ).type === 'column' ) ) {
+				sib = sib.nextElementSibling;
+			}
+
+			var self = this;
+			var r = this.colResize = {
+				col:     col,
+				id:      this.activeId,
+				sib:     sib || null,
+				sibId:   sib ? sib.getAttribute( 'data-fw-item-id' ) : null,
+				startTw: colTwelfths( col ),
+				rowRect: row.getBoundingClientRect(),
+				colLeft: col.getBoundingClientRect().left,
+				curTw:   0
+			};
+			r.combined = r.startTw + ( sib ? colTwelfths( sib ) : 0 );
+
+			r.move = function ( ev ) { self.onColResizeMove( ev ); };
+			r.up   = function ( ev ) { self.onColResizeUp( ev ); };
+			window.addEventListener( 'pointermove', r.move, true );
+			window.addEventListener( 'pointerup', r.up, true );
+			window.addEventListener( 'pointercancel', r.up, true );
+
+			document.documentElement.classList.add( 'fw-le-col-resizing' );
+			this.els.resize.style.display = 'none';
+			this.els.activeBox.style.display = 'none';
+			this.els.hoverBox.style.display = 'none';
+		},
+
+		onColResizeMove: function ( e ) {
+			var r = this.colResize;
+			if ( ! r ) { return; }
+			e.preventDefault();
+
+			var tw = Math.round( ( e.clientX - r.colLeft ) / r.rowRect.width * 12 );
+
+			if ( r.sib ) {
+				tw = Math.max( 1, Math.min( r.combined - 1, tw ) );
+				r.curTw    = tw;
+				r.curSibTw = r.combined - tw;
+				applyColWidth( r.col, r.curTw );
+				applyColWidth( r.sib, r.curSibTw );
+			} else {
+				tw = Math.max( 1, Math.min( 12, tw ) );
+				r.curTw = tw;
+				applyColWidth( r.col, r.curTw );
+			}
+
+			this.showResizeTip( e.clientX, e.clientY, r );
+		},
+
+		onColResizeUp: function () {
+			var r = this.colResize;
+			if ( ! r ) { return; }
+			window.removeEventListener( 'pointermove', r.move, true );
+			window.removeEventListener( 'pointerup', r.up, true );
+			window.removeEventListener( 'pointercancel', r.up, true );
+			this.colResize = null;
+
+			document.documentElement.classList.remove( 'fw-le-col-resizing' );
+			if ( this.els.resizeTip ) { this.els.resizeTip.style.display = 'none'; }
+
+			// Commit only on a real change.
+			if ( r.curTw && r.curTw !== r.startTw && GRID[ r.curTw ] ) {
+				var payload = { id: r.id, width: GRID[ r.curTw ].id };
+				if ( r.sib && r.curSibTw && GRID[ r.curSibTw ] ) {
+					payload.siblingId    = r.sibId;
+					payload.siblingWidth = GRID[ r.curSibTw ].id;
+				}
+				this.toShell( 'resize-column', payload );
+			}
+
+			this.select( r.col, r.id ); // redraw overlay + reposition grip
+		},
+
+		showResizeTip: function ( x, y, r ) {
+			var tip = this.els.resizeTip;
+			if ( ! tip ) { return; }
+			tip.style.display = 'block';
+			tip.style.left = ( x + 14 ) + 'px';
+			tip.style.top  = ( y - 10 ) + 'px';
+			tip.textContent = r.sib
+				? ( fracLabel( r.curTw ) + '  ·  ' + fracLabel( r.curSibTw ) )
+				: fracLabel( r.curTw );
 		},
 
 		/* ---- drag to reorder (Phase B) --------------------------------- */
@@ -434,7 +595,131 @@
 				content.appendChild( nu );
 			}
 			this.ensureSelectable( nu );
+			this.markEmptyColumns();
 			this.select( nu, payload.id );
+		},
+
+		/** Insert a freshly-added section at the page root, then select it. The
+		 *  shell already sent `sync-model` (so the new section + column ids are in
+		 *  the index); here we only place the DOM. afterId is the previous last
+		 *  top-level item — we drop after it; on an empty page we append to the
+		 *  page-builder content container. */
+		insertSection: function ( payload ) {
+			if ( ! payload || ! payload.id || ! payload.html ) { return; }
+
+			var tmp = document.createElement( 'div' );
+			tmp.innerHTML = String( payload.html || '' ).trim();
+			var nu = tmp.firstElementChild;
+			if ( ! nu ) { return; }
+
+			var placed = false;
+			if ( payload.afterId ) {
+				var after = document.querySelector( '[data-fw-item-id="' + payload.afterId + '"]' );
+				if ( after && after.parentNode ) {
+					after.parentNode.insertBefore( nu, after.nextSibling );
+					placed = true;
+				}
+			}
+			if ( ! placed ) {
+				var container = this.findSectionsContainer();
+				if ( container ) { container.appendChild( nu ); placed = true; }
+			}
+			if ( ! placed ) { return; }
+
+			this.ensureSelectable( nu );
+			this.markEmptyColumns( nu );
+			this.ensureAddSectionZone();
+			this.ensureSectionAddColZones();
+			this.select( nu, payload.id );
+			nu.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+		},
+
+		/** The element that holds top-level sections. Prefer the page-builder
+		 *  content wrapper; else fall back to the parent of any indexed top-level
+		 *  section already in the DOM. */
+		findSectionsContainer: function () {
+			var pbc = document.querySelector( '.fw-page-builder-content' );
+			if ( pbc ) { return pbc; }
+			var firstSection = document.querySelector( '[data-fw-item-id]' );
+			if ( firstSection ) { return firstSection.parentNode; }
+			// Blank builder page: fall back to the post content wrapper.
+			var ec = document.querySelector( '.entry-content, .fw-page-content, article .entry-content, main' );
+			return ec || document.body || null;
+		},
+
+		/** A persistent "+ Add Section" bar pinned after the last section (and an
+		 *  "Add your first section" empty-state when the page has no sections).
+		 *  Clicking it asks the shell to open the structure picker. Kept last in the
+		 *  sections container and re-synced after every structural change. */
+		ensureAddSectionZone: function () {
+			var container = this.findSectionsContainer();
+			if ( ! container ) { return; }
+
+			var l = ( this.config && this.config.l10n ) || {};
+			var zone = this.els.addZone;
+			if ( ! zone ) {
+				var self = this;
+				zone = this.els.addZone = document.createElement( 'div' );
+				zone.className = 'fw-le-add-section-zone';
+				zone.innerHTML = '<button type="button" class="fw-le-add-section-btn">' +
+					'<span class="fw-le-add-section-plus">+</span><em></em></button>';
+				zone.querySelector( '.fw-le-add-section-btn' ).addEventListener( 'click', function ( e ) {
+					e.preventDefault();
+					e.stopPropagation();
+					self.toShell( 'open-structure-picker', {} );
+				} );
+			}
+
+			var empty = ! this.model || this.model.length === 0;
+			zone.classList.toggle( 'fw-le-add-section-zone--empty', empty );
+			zone.querySelector( 'em' ).textContent = empty
+				? ( l.firstSection || 'Add your first section' )
+				: ( l.addSectionHere || 'Add Section' );
+
+			container.appendChild( zone ); // always keep it last
+		},
+
+		/** Inject a "+ Add Column" bar at the bottom of each section (below its
+		 *  columns), re-created after every section re-render. Clicking it asks the
+		 *  shell to open the column-width picker for that section. */
+		ensureSectionAddColZones: function () {
+			var self = this;
+			var all = document.querySelectorAll( '[data-fw-item-id]' );
+			for ( var i = 0; i < all.length; i++ ) {
+				var el = all[ i ];
+				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
+				if ( ! meta || ! /section$/.test( meta.type || '' ) ) { continue; }
+				if ( el.querySelector( ':scope > .fw-le-addcol-zone' ) ) { continue; }
+
+				var sid  = el.getAttribute( 'data-fw-item-id' );
+				var zone = document.createElement( 'div' );
+				zone.className = 'fw-le-addcol-zone';
+				zone.innerHTML = '<button type="button" class="fw-le-addcol-btn">' +
+					'<span class="fw-le-addcol-plus">+</span> ' +
+					( ( ( this.config && this.config.l10n ) || {} ).addColumn || 'Add Column' ) + '</button>';
+				zone.querySelector( 'button' ).addEventListener( 'click', ( function ( sectionId ) {
+					return function ( e ) {
+						e.preventDefault();
+						e.stopPropagation();
+						self.toShell( 'open-column-picker', { id: sectionId } );
+					};
+				} )( sid ) );
+				el.appendChild( zone );
+			}
+		},
+
+		/** Tag columns with no leaf children so CSS can render them as a visible,
+		 *  labelled drop zone (an empty new section is otherwise an unusable sliver). */
+		markEmptyColumns: function ( scope ) {
+			var root = scope || document;
+			var cols = root.querySelectorAll ? root.querySelectorAll( '[data-fw-item-id]' ) : [];
+			for ( var i = 0; i < cols.length; i++ ) {
+				var el = cols[ i ];
+				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
+				if ( ! meta || meta.type !== 'column' ) { continue; }
+				if ( this.leafChildrenOf( el, null ).length === 0 ) { el.classList.add( 'fw-le-empty-col' ); }
+				else { el.classList.remove( 'fw-le-empty-col' ); }
+			}
 		},
 
 		/** Inline / empty elements (e.g. an icon with no glyph) can render to a
@@ -546,6 +831,7 @@
 				d.container.insertBefore( d.el, d.before || null );
 			}
 
+			if ( d.isLeaf ) { this.markEmptyColumns(); }
 			this.select( d.el, d.id );
 
 			var beforeId = ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null;
@@ -565,8 +851,23 @@
 
 			old.parentNode.replaceChild( nu, old );
 			this.ensureSelectable( nu );
+			this.markEmptyColumns();
+			this.ensureSectionAddColZones();
 
 			if ( this.hoverEl === old ) { this.hoverEl = null; }
+
+			// A caller can ask to select a specific descendant after the swap (e.g.
+			// the freshly-added column), so the user is taken straight to it instead
+			// of the re-rendered container.
+			if ( payload.selectId ) {
+				var target = document.querySelector( '[data-fw-item-id="' + payload.selectId + '"]' );
+				if ( target ) {
+					this.select( target, payload.selectId );
+					target.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+					return;
+				}
+			}
+
 			if ( this.activeEl === old || this.activeId === payload.id ) {
 				this.select( nu, payload.id );
 			} else {
@@ -606,7 +907,8 @@
 				up:    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 				copy:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 				edit:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M10.5 3l2.5 2.5-7 7-3 .5.5-3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
-				trash: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3.5 4.5h9M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+				trash: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3.5 4.5h9M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+				addcol: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="3.5" width="4.5" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M11 5.5v5M8.5 8h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
 			};
 
 			var root = document.createElement( 'div' );
@@ -619,11 +921,14 @@
 						'<button type="button" class="fw-le-tag__btn fw-le-act-drag" title="Drag to reorder">' + SVG.drag + '</button>' +
 						'<span class="fw-le-tag__label"></span>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-parent" title="Select parent">' + SVG.up + '</button>' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-addcol" title="Add column" style="display:none">' + SVG.addcol + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-duplicate" title="Duplicate">' + SVG.copy + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-edit" title="Edit">' + SVG.edit + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-tag__btn--danger fw-le-act-delete" title="Delete">' + SVG.trash + '</button>' +
 					'</div>' +
 				'</div>' +
+				'<div class="fw-le-resize" style="display:none" title="Drag to resize (12-column grid)"></div>' +
+				'<div class="fw-le-resize-tip" style="display:none"></div>' +
 				'<div id="fw-le-dropline" style="display:none"></div>';
 
 			document.body.appendChild( root );
@@ -632,9 +937,13 @@
 			this.els.hoverBox  = root.querySelector( '.fw-le-box--hover' );
 			this.els.activeBox = root.querySelector( '.fw-le-box--active' );
 			this.els.activeLbl = root.querySelector( '.fw-le-tag__label' );
+			this.els.addColBtn = root.querySelector( '.fw-le-act-addcol' );
+			this.els.resize    = root.querySelector( '.fw-le-resize' );
+			this.els.resizeTip = root.querySelector( '.fw-le-resize-tip' );
 			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
 
 			var self = this;
+			this.els.resize.addEventListener( 'pointerdown', function ( e ) { self.startColResize( e ); } );
 			function on( sel, fn ) {
 				root.querySelector( sel ).addEventListener( 'click', function ( e ) {
 					e.preventDefault(); e.stopPropagation();
@@ -646,6 +955,9 @@
 				self.startDrag( e );
 			} );
 			on( '.fw-le-act-parent', function () { self.selectParent(); } );
+			on( '.fw-le-act-addcol', function () {
+				if ( self.activeId ) { self.toShell( 'add-column', { id: self.activeId } ); }
+			} );
 			on( '.fw-le-act-duplicate', function () {
 				if ( self.activeId ) { self.toShell( 'duplicate-request', { id: self.activeId } ); }
 			} );
@@ -672,6 +984,9 @@
 			document.addEventListener( 'click', function ( e ) {
 				if ( self.editing ) { return; } // let clicks place the caret while editing
 				if ( e.target.closest && e.target.closest( '#fw-le-overlay' ) ) { return; }
+				// Editor chrome injected into the canvas (add-section / add-column
+				// bars) handles its own clicks — don't hijack them for selection.
+				if ( e.target.closest && e.target.closest( '.fw-le-addcol-zone, .fw-le-add-section-zone' ) ) { return; }
 				var hit = self.selectableFrom( e.target );
 				if ( hit ) {
 					e.preventDefault();
@@ -727,6 +1042,10 @@
 			this.setHover( null );
 			this.placeActive( el );
 			this.els.activeLbl.textContent = ( this.index[ id ] && this.index[ id ].label ) || 'Element';
+
+			// "+ Column" is only meaningful on a section (adds a column to it).
+			var isSection = ( this.index[ id ] && /section$/.test( this.index[ id ].type || '' ) );
+			if ( this.els.addColBtn ) { this.els.addColBtn.style.display = isSection ? '' : 'none'; }
 			this.toShell( 'select', {
 				id:    id,
 				type:  this.index[ id ] && this.index[ id ].type,
@@ -752,6 +1071,23 @@
 		placeActive: function ( el ) {
 			var r = this.placeBox( this.els.activeBox, el );
 			this.els.activeBox.setAttribute( 'data-tag-below', r.top < 28 ? '1' : '0' );
+			this.updateResizeHandle();
+		},
+
+		/** Show + position the column resize grip on the right edge of the selected
+		 *  column (hidden for any non-column selection or while dragging it). */
+		updateResizeHandle: function () {
+			var h = this.els.resize;
+			if ( ! h ) { return; }
+			var meta = this.activeId ? this.index[ this.activeId ] : null;
+			if ( ! this.activeEl || ! meta || meta.type !== 'column' || this.colResize ) {
+				h.style.display = 'none';
+				return;
+			}
+			var rc = this.activeEl.getBoundingClientRect();
+			h.style.display = 'block';
+			h.style.top  = ( rc.top + rc.height / 2 - 18 ) + 'px';
+			h.style.left = ( rc.right - 6 ) + 'px';
 		},
 
 		placeBox: function ( box, el ) {

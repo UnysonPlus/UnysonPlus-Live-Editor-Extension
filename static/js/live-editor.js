@@ -52,6 +52,59 @@
 		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
 	}
 
+	// Twelfths → the page-builder width fraction id (mirrors builder grid.columns).
+	var GRID_ID = {
+		1: '1_12', 2: '1_6', 3: '1_4', 4: '1_3', 5: '5_12', 6: '1_2',
+		7: '7_12', 8: '2_3', 9: '3_4', 10: '5_6', 11: '11_12', 12: '1_1'
+	};
+
+	// Width fraction id → twelfths (the inverse, plus the odd 1/5 and auto col).
+	var TW_OF = {
+		'1_12': 1, '1_6': 2, '1_5': 2, '1_4': 3, '1_3': 4, '5_12': 5, '1_2': 6,
+		'7_12': 7, '2_3': 8, '3_4': 9, '5_6': 10, '11_12': 11, '1_1': 12, 'col': 12
+	};
+
+	function twOf( width ) { return TW_OF[ width ] || 12; }
+
+	/** Reduced fraction label for a fraction id ("1_2" → "1/2"). */
+	function fracOf( id ) { return String( id || '' ).replace( '_', '/' ); }
+
+	/** Even-split N columns across the 12-grid (remainder spread to the first
+	 *  columns), returning an array of width fraction ids. Always sums to 12. */
+	function evenWidths( count ) {
+		count = Math.max( 1, Math.min( 12, count ) );
+		var base = Math.floor( 12 / count ), rem = 12 % count, out = [];
+		for ( var i = 0; i < count; i++ ) { out.push( GRID_ID[ base + ( i < rem ? 1 : 0 ) ] ); }
+		return out;
+	}
+
+	/** The array that directly holds a section's column items — the section's
+	 *  _items when those are columns, else a contained row's _items (some saved
+	 *  trees wrap columns in an explicit row). */
+	function columnArrayOf( node ) {
+		if ( ! node._items ) { node._items = []; }
+		var hasCol = node._items.some( function ( it ) { return it && it.type === 'column'; } );
+		if ( hasCol || ! node._items.length ) { return node._items; }
+		var row = node._items.filter( function ( it ) { return it && it.type === 'row'; } )[ 0 ];
+		if ( row ) { if ( ! row._items ) { row._items = []; } return row._items; }
+		return node._items;
+	}
+
+	// Column-structure presets for the picker. `parts` are flex weights for the
+	// thumbnail; `cols` are the width fraction ids the section is built with.
+	var LAYOUTS = [
+		{ cols: [ '1_1' ],                               parts: [ 12 ] },
+		{ cols: [ '1_2', '1_2' ],                        parts: [ 6, 6 ] },
+		{ cols: [ '1_3', '1_3', '1_3' ],                 parts: [ 4, 4, 4 ] },
+		{ cols: [ '1_4', '1_4', '1_4', '1_4' ],          parts: [ 3, 3, 3, 3 ] },
+		{ cols: [ '1_3', '2_3' ],                        parts: [ 4, 8 ] },
+		{ cols: [ '2_3', '1_3' ],                        parts: [ 8, 4 ] },
+		{ cols: [ '1_4', '3_4' ],                        parts: [ 3, 9 ] },
+		{ cols: [ '3_4', '1_4' ],                        parts: [ 9, 3 ] },
+		{ cols: [ '1_4', '1_2', '1_4' ],                 parts: [ 3, 6, 3 ] },
+		{ cols: [ '1_6', '1_6', '1_6', '1_6', '1_6', '1_6' ], parts: [ 2, 2, 2, 2, 2, 2 ] }
+	];
+
 	/** A fresh 32-hex builder unique_id (same shape the builder uses). */
 	function generateUid() {
 		if ( window.crypto && window.crypto.getRandomValues ) {
@@ -193,6 +246,16 @@
 				case 'update-text':
 					this.updateText( data.payload );
 					break;
+				case 'resize-column':
+					this.resizeColumn( data.payload );
+					break;
+				case 'add-column':
+				case 'open-column-picker':
+					this.openColumnPicker( data.payload && data.payload.id );
+					break;
+				case 'open-structure-picker':
+					this.openStructurePicker();
+					break;
 				default:
 					break;
 			}
@@ -211,6 +274,16 @@
 				'</button>'
 			).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
 			this.$.addBtn.on( 'click', function () { $( 'body' ).toggleClass( 'fw-le-panel-open' ); } );
+
+			// "Add Section" — opens the structure picker (choose a column layout +
+			// section type), then inserts that section at the end of the page.
+			this.$.sectionBtn = $(
+				'<button type="button" id="fw-le-add-section" class="fw-le-btn fw-le-btn--ghost">' +
+					'<span class="dashicons dashicons-screenoptions"></span> ' + ( ( cfg.l10n && cfg.l10n.addSection ) || 'Section' ) +
+				'</button>'
+			).insertAfter( this.$.addBtn );
+			this.$.sectionBtn.on( 'click', function () { self.openStructurePicker(); } );
+			this.buildStructurePicker();
 
 			var $panel = $(
 				'<aside id="fw-le-panel">' +
@@ -310,6 +383,196 @@
 			} );
 		},
 
+		/* ---- structure picker (choose section layout + type) ----------- */
+
+		buildStructurePicker: function () {
+			var self = this;
+			var l10n = cfg.l10n || {};
+			var types = cfg.sectionTypes || [ { id: 'section', title: 'Standard' } ];
+
+			var $pick = this.$.picker = $(
+				'<div class="fw-le-picker-backdrop" style="display:none">' +
+					'<div class="fw-le-picker" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-picker__head">' +
+							'<strong>' + ( l10n.structure || 'Choose a structure' ) + '</strong>' +
+							'<button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button>' +
+						'</div>' +
+						'<div class="fw-le-picker__types"></div>' +
+						'<div class="fw-le-picker__grid"></div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+
+			// Section-type pills (only when more than one type exists).
+			var $types = $pick.find( '.fw-le-picker__types' );
+			if ( types.length > 1 ) {
+				$types.append( '<span class="fw-le-picker__typelbl">' + ( l10n.sectionType || 'Section type' ) + '</span>' );
+				types.forEach( function ( t, i ) {
+					var $p = $( '<button type="button" class="fw-le-picker__type"></button>' )
+						.attr( 'data-type', t.id ).text( t.title );
+					if ( i === 0 ) { $p.addClass( 'is-active' ); }
+					$types.append( $p );
+				} );
+				this.pickerType = types[ 0 ].id;
+				$types.on( 'click', '.fw-le-picker__type', function () {
+					$types.find( '.fw-le-picker__type' ).removeClass( 'is-active' );
+					$( this ).addClass( 'is-active' );
+					self.pickerType = $( this ).attr( 'data-type' );
+				} );
+			} else {
+				this.pickerType = types[ 0 ] ? types[ 0 ].id : 'section';
+				$types.hide();
+			}
+
+			// Layout tiles (CSS-drawn column splits).
+			var $grid = $pick.find( '.fw-le-picker__grid' );
+			LAYOUTS.forEach( function ( lay, idx ) {
+				var bars = lay.parts.map( function ( p ) {
+					return '<span style="flex:' + p + '"></span>';
+				} ).join( '' );
+				var $tile = $( '<button type="button" class="fw-le-picker__tile"><span class="fw-le-picker__cols">' + bars + '</span></button>' );
+				$tile.attr( 'data-idx', idx ).attr( 'title', lay.parts.length + ' column' + ( lay.parts.length > 1 ? 's' : '' ) );
+				$grid.append( $tile );
+			} );
+
+			$grid.on( 'click', '.fw-le-picker__tile', function () {
+				var lay = LAYOUTS[ parseInt( $( this ).attr( 'data-idx' ), 10 ) ];
+				if ( lay ) { self.addSection( lay.cols, self.pickerType ); }
+				self.closeStructurePicker();
+			} );
+
+			$pick.find( '.fw-le-picker__close' ).on( 'click', function () { self.closeStructurePicker(); } );
+			$pick.on( 'click', function ( e ) { if ( e.target === $pick[ 0 ] ) { self.closeStructurePicker(); } } );
+		},
+
+		openStructurePicker: function () {
+			if ( ! this.$.picker ) { this.buildStructurePicker(); }
+			this.$.picker.css( 'display', 'flex' );
+		},
+
+		closeStructurePicker: function () {
+			if ( this.$.picker ) { this.$.picker.hide(); }
+		},
+
+		/** Insert a fresh section with the chosen column layout + type at the page
+		 *  root. The server builds the section+columns and renders the HTML (with
+		 *  structure-correction on); we add the item to the model and drop the HTML
+		 *  after the last section (or, on an empty page, the frame appends it). */
+		addSection: function ( cols, type ) {
+			var self = this;
+			var data = {
+				cols:         JSON.stringify( cols || [ '1_1' ] ),
+				section_type: type || 'section'
+			};
+			this.ajax( cfg.actions.newSection, data, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new section failed', resp );
+					return;
+				}
+				var item = resp.data.item;
+				var id   = ( item.atts && item.atts.unique_id ) || item.unique_id;
+
+				var prevLast = self.model.length ? self.model[ self.model.length - 1 ] : null;
+				var afterId  = prevLast ? ( ( prevLast.atts && prevLast.atts.unique_id ) || prevLast.unique_id ) : null;
+
+				self.model.push( item );
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+				self.toFrame( 'insert-section', { html: resp.data.html, id: id, afterId: afterId } );
+
+				$( 'body' ).addClass( 'fw-le-panel-open' );
+			} );
+		},
+
+		/* ---- column picker (add a column of a chosen width) ------------ */
+
+		/** Open the column-width modal for a section. Matches the classic backend
+		 *  builder: every grid width (1/1 … 1/12) is offered, and picking one adds a
+		 *  SINGLE column of exactly that width. Existing columns are untouched; the
+		 *  grid wraps a row that overflows 12 (e.g. a 1/4 added to a full 1/1 row
+		 *  drops to a new row on the left). */
+		openColumnPicker: function ( sectionId ) {
+			var entry = sectionId && this.index[ sectionId ];
+			if ( ! entry || ! isContainer( entry.node ) ) { return; }
+
+			var self = this;
+			var l10n = cfg.l10n || {};
+
+			if ( this.$.colPicker ) { this.$.colPicker.remove(); }
+			var $pick = this.$.colPicker = $(
+				'<div class="fw-le-picker-backdrop" style="display:none">' +
+					'<div class="fw-le-picker fw-le-picker--col" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-picker__head">' +
+							'<strong>' + ( l10n.addColumn || 'Add Column' ) + '</strong>' +
+							'<button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button>' +
+						'</div>' +
+						'<div class="fw-le-picker__grid fw-le-picker__grid--col"></div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+
+			var $grid = $pick.find( '.fw-le-picker__grid' );
+			for ( var tw = 12; tw >= 1; tw-- ) {
+				var id = GRID_ID[ tw ];
+				var pct = Math.round( ( tw / 12 ) * 100 );
+				var $tile = $(
+					'<button type="button" class="fw-le-picker__tile fw-le-coltile">' +
+						'<span class="fw-le-picker__cols"><span style="flex:' + tw + '"></span><span class="fw-le-coltile__rest" style="flex:' + ( 12 - tw ) + '"></span></span>' +
+						'<span class="fw-le-coltile__lbl">' + fracOf( id ) + '</span>' +
+					'</button>'
+				);
+				$tile.attr( 'data-width', id ).attr( 'title', fracOf( id ) + '  (' + pct + '%)' );
+				$grid.append( $tile );
+			}
+
+			$grid.on( 'click', '.fw-le-coltile', function () {
+				self.addColumn( sectionId, $( this ).attr( 'data-width' ) );
+				$pick.remove();
+				self.$.colPicker = null;
+			} );
+			$pick.find( '.fw-le-picker__close' ).on( 'click', function () { $pick.remove(); self.$.colPicker = null; } );
+			$pick.on( 'click', function ( e ) { if ( e.target === $pick[ 0 ] ) { $pick.remove(); self.$.colPicker = null; } } );
+
+			$pick.css( 'display', 'flex' );
+		},
+
+		/** Append a SINGLE column of `width` to a section — exactly like the backend
+		 *  builder. Existing columns keep their widths; the page-builder's row
+		 *  correction wraps the row when the cumulative width exceeds 12. */
+		addColumn: function ( sectionId, width ) {
+			var entry = sectionId && this.index[ sectionId ];
+			if ( ! entry || ! isContainer( entry.node ) ) { return; }
+			var section = entry.node;
+			var self = this;
+			width = width || '1_1';
+
+			this.ajax( cfg.actions.newColumn, {}, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new column failed', resp );
+					return;
+				}
+				var col = resp.data.item;
+				col.width = width;
+				var newColId = ( col.atts && col.atts.unique_id ) || col.unique_id;
+				columnArrayOf( section ).push( col );
+
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+
+				self.ajax( cfg.actions.renderItem, { item: JSON.stringify( section ) }, function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+						self.toFrame( 'replace', {
+							id:       sectionId,
+							html:     r.data.html,
+							selectId: newColId   // select + scroll to the new column
+						} );
+					}
+				} );
+			} );
+		},
+
 		/* ---- pointer-capture drag from the panel ----------------------- */
 
 		startPanelDrag: function ( info, e ) {
@@ -391,6 +654,22 @@
 			if ( ! node.atts ) { node.atts = {}; }
 			if ( node.atts.text === payload.text ) { return; } // no change
 			node.atts.text = payload.text;
+			this.markDirty();
+		},
+
+		/** Column resized on the canvas (drag the 12-col grid handle). The frame
+		 *  already updated the DOM classes; mirror the new width(s) into the model
+		 *  (`width` is a top-level key on a column item) so the change persists. */
+		resizeColumn: function ( payload ) {
+			payload = payload || {};
+			var node = this.nodeOf( payload.id );
+			if ( ! node || ! payload.width ) { return; }
+			node.width = payload.width;
+
+			if ( payload.siblingId && payload.siblingWidth ) {
+				var sib = this.nodeOf( payload.siblingId );
+				if ( sib ) { sib.width = payload.siblingWidth; }
+			}
 			this.markDirty();
 		},
 

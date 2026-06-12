@@ -397,6 +397,164 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	z-index: 199990 !important;
 }
 
+/* ---- Structure picker ----------------------------------------------------- */
+
+.fw-le-picker-backdrop {
+	position: fixed;
+	inset: 0;
+	z-index: 100000;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba( 20, 21, 26, .55 );
+}
+
+.fw-le-picker {
+	width: 560px;
+	max-width: calc( 100vw - 40px );
+	background: #fff;
+	border-radius: 12px;
+	box-shadow: 0 24px 64px rgba( 0, 0, 0, .4 );
+	padding: 20px 22px 24px;
+	box-sizing: border-box;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.fw-le-picker__head {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	margin-bottom: 16px;
+}
+
+.fw-le-picker__head strong {
+	font-size: 16px;
+	font-weight: 700;
+	color: #1e1f26;
+}
+
+.fw-le-picker__close {
+	background: none;
+	border: 0;
+	font-size: 24px;
+	line-height: 1;
+	color: #9aa0ad;
+	cursor: pointer;
+}
+
+.fw-le-picker__close:hover { color: #1e1f26; }
+
+.fw-le-picker__types {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 18px;
+	flex-wrap: wrap;
+}
+
+.fw-le-picker__typelbl {
+	font-size: 11px;
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: .5px;
+	color: #8a8f9c;
+	margin-right: 4px;
+}
+
+.fw-le-picker__type {
+	height: 30px;
+	padding: 0 14px;
+	border-radius: 999px;
+	border: 1px solid #d8dae0;
+	background: #fff;
+	color: #4b4f5c;
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+
+.fw-le-picker__type:hover { border-color: #4f8cff; color: #1e1f26; }
+
+.fw-le-picker__type.is-active {
+	background: #4f8cff;
+	border-color: #4f8cff;
+	color: #fff;
+}
+
+.fw-le-picker__grid {
+	display: grid;
+	grid-template-columns: repeat( 5, 1fr );
+	gap: 12px;
+}
+
+.fw-le-picker__tile {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 60px;
+	padding: 10px;
+	background: #f6f7f9;
+	border: 1px solid #e2e4ea;
+	border-radius: 8px;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, transform .08s ease;
+}
+
+.fw-le-picker__tile:hover {
+	background: #eef3ff;
+	border-color: #4f8cff;
+	transform: translateY( -1px );
+}
+
+.fw-le-picker__cols {
+	display: flex;
+	gap: 4px;
+	width: 100%;
+	height: 100%;
+}
+
+.fw-le-picker__cols span {
+	background: #c2cbe0;
+	border-radius: 3px;
+}
+
+.fw-le-picker__tile:hover .fw-le-picker__cols span { background: #4f8cff; }
+
+/* Column-width picker (single-column tiles with a label). */
+.fw-le-picker__grid--col {
+	grid-template-columns: repeat( 4, 1fr );
+}
+
+.fw-le-coltile {
+	flex-direction: column;
+	gap: 8px;
+	height: auto;
+	padding: 10px 8px;
+}
+
+.fw-le-coltile .fw-le-picker__cols {
+	height: 26px;
+}
+
+.fw-le-coltile__rest {
+	background: transparent !important;
+	border: 1px dashed #d4d9e4;
+}
+
+.fw-le-coltile__lbl {
+	font-size: 12px;
+	font-weight: 700;
+	color: #4b4f5c;
+}
+
+.fw-le-coltile:hover .fw-le-coltile__lbl { color: #2756b0; }
+
+@media ( max-width: 600px ) {
+	.fw-le-picker__grid { grid-template-columns: repeat( 3, 1fr ); }
+	.fw-le-picker__grid--col { grid-template-columns: repeat( 3, 1fr ); }
+}
+
 /* Floating ghost that follows the cursor while dragging a panel element. */
 .fw-le-drag-ghost {
 	position: fixed;

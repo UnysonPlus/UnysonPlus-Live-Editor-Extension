@@ -15,6 +15,21 @@ body.fw-live-editor-frame-active {
 	cursor: default;
 }
 
+/* Scroll-reveal animations: on the live site an element with `sc-anim-pending`
+ * is visibility:hidden until the theme's scroll observer reveals it. That
+ * observer doesn't run for nodes the editor swaps in (e.g. after adding a
+ * column the section re-renders), so animated content would stay hidden — a
+ * tall, empty-looking column. In the editor we always want content shown in its
+ * final, static state, so force every scroll-animated element fully visible and
+ * cancel the entrance animation. */
+body.fw-live-editor-frame-active .sc-anim-pending,
+body.fw-live-editor-frame-active [data-sc-anim] {
+	visibility: visible !important;
+	opacity: 1 !important;
+	animation: none !important;
+	transform: none !important;
+}
+
 /* A collapsed (0×0) element — e.g. an inline icon with no glyph — is forced to a
  * visible, clickable block in edit mode so it can always be selected and edited. */
 body.fw-live-editor-frame-active .fw-le-collapsed {
@@ -68,6 +83,138 @@ body.fw-live-editor-frame-active [data-fw-item-id] {
 	outline: 1px dashed rgba( 79, 140, 255, .18 );
 	outline-offset: -1px;
 	min-height: 14px;
+}
+
+/* An empty column (no leaf children) — e.g. the lone column of a freshly-added
+ * section. Give it real height + a hint so it's an obvious, usable drop target
+ * instead of an unselectable sliver. Edit-mode only. */
+body.fw-live-editor-frame-active .fw-le-empty-col {
+	min-height: 64px;
+	position: relative;
+	background: rgba( 79, 140, 255, .035 );
+	outline: 1px dashed rgba( 79, 140, 255, .35 ) !important;
+	outline-offset: -1px;
+	/* In a flex row, an empty column would otherwise stretch to match a tall
+	 * filled sibling. Pin it to its natural 64px so it stays a compact drop
+	 * zone regardless of neighbours. */
+	align-self: flex-start;
+}
+
+body.fw-live-editor-frame-active .fw-le-empty-col::after {
+	content: "Drop elements here";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 12px;
+	font-style: italic;
+	color: #7e93c4;
+	pointer-events: none;
+}
+
+/* ---- "Add Section" zone (pinned after the last section) ------------------- */
+
+body.fw-live-editor-frame-active .fw-le-add-section-zone {
+	padding: 16px;
+	text-align: center;
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-zone--empty {
+	padding: 60px 16px;
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 10px;
+	padding: 12px 22px;
+	background: rgba( 79, 140, 255, .06 );
+	border: 1px dashed #9bb6f5;
+	border-radius: 8px;
+	color: #3d6fd0;
+	font-size: 13px;
+	font-weight: 600;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-btn:hover {
+	background: rgba( 79, 140, 255, .12 );
+	border-color: #4f8cff;
+	color: #2756b0;
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-zone--empty .fw-le-add-section-btn {
+	padding: 22px 34px;
+	font-size: 15px;
+}
+
+/* Pixel-perfect plus glyph (two bars) — the "+" text character never centers
+ * reliably across fonts, so draw it. The literal "+" in the markup is hidden. */
+body.fw-live-editor-frame-active .fw-le-add-section-plus,
+body.fw-live-editor-frame-active .fw-le-addcol-plus {
+	position: relative;
+	display: inline-block;
+	border-radius: 50%;
+	background: #4f8cff;
+	font-size: 0;
+	color: transparent;
+	flex: 0 0 auto;
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-plus { width: 22px; height: 22px; }
+body.fw-live-editor-frame-active .fw-le-addcol-plus { width: 18px; height: 18px; }
+
+body.fw-live-editor-frame-active .fw-le-add-section-plus::before,
+body.fw-live-editor-frame-active .fw-le-add-section-plus::after,
+body.fw-live-editor-frame-active .fw-le-addcol-plus::before,
+body.fw-live-editor-frame-active .fw-le-addcol-plus::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	background: #fff;
+	transform: translate( -50%, -50% );
+}
+
+body.fw-live-editor-frame-active .fw-le-add-section-plus::before { width: 10px; height: 2px; }
+body.fw-live-editor-frame-active .fw-le-add-section-plus::after  { width: 2px; height: 10px; }
+body.fw-live-editor-frame-active .fw-le-addcol-plus::before { width: 8px; height: 2px; }
+body.fw-live-editor-frame-active .fw-le-addcol-plus::after  { width: 2px; height: 8px; }
+
+body.fw-live-editor-frame-active .fw-le-add-section-btn em {
+	font-style: normal;
+}
+
+/* ---- "Add Column" bar (bottom of each section) ---------------------------- */
+
+body.fw-live-editor-frame-active .fw-le-addcol-zone {
+	padding: 10px 16px 14px;
+	text-align: center;
+}
+
+body.fw-live-editor-frame-active .fw-le-addcol-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	padding: 7px 16px;
+	background: #fff;
+	border: 1px dashed #c2cbe0;
+	border-radius: 6px;
+	color: #3d6fd0;
+	font-size: 12px;
+	font-weight: 600;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	cursor: pointer;
+	transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+
+body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
+	background: rgba( 79, 140, 255, .08 );
+	border-color: #4f8cff;
+	color: #2756b0;
 }
 
 /* ---- Overlay root --------------------------------------------------------- */
@@ -162,6 +309,61 @@ body.fw-live-editor-frame-active [data-fw-item-id] {
 
 #fw-le-overlay .fw-le-act-drag {
 	cursor: grab;
+}
+
+/* ---- Column resize grip (right edge of a selected column) ----------------- */
+
+#fw-le-overlay .fw-le-resize {
+	position: fixed;
+	width: 12px;
+	height: 36px;
+	background: #4f8cff;
+	border: 2px solid #fff;
+	border-radius: 6px;
+	box-shadow: 0 1px 5px rgba( 0, 0, 0, .35 );
+	cursor: ew-resize;
+	pointer-events: auto;
+	z-index: 2147483002;
+	box-sizing: border-box;
+}
+
+#fw-le-overlay .fw-le-resize::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	width: 2px;
+	height: 14px;
+	margin: -7px 0 0 -3px;
+	border-left: 1px solid rgba( 255, 255, 255, .9 );
+	border-right: 1px solid rgba( 255, 255, 255, .9 );
+	box-sizing: content-box;
+}
+
+#fw-le-overlay .fw-le-resize:hover {
+	background: #3d7bf0;
+}
+
+#fw-le-overlay .fw-le-resize-tip {
+	position: fixed;
+	padding: 3px 8px;
+	background: #23252e;
+	color: #fff;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: .3px;
+	border-radius: 4px;
+	pointer-events: none;
+	white-space: nowrap;
+	z-index: 2147483003;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+html.fw-le-col-resizing,
+html.fw-le-col-resizing * {
+	cursor: ew-resize !important;
+	user-select: none !important;
+	-webkit-user-select: none !important;
 }
 
 /* ---- Drag-to-reorder ------------------------------------------------------ */
