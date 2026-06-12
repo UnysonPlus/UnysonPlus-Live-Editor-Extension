@@ -386,6 +386,28 @@ body.fw-live-editor-frame-active .fw-le-dragging {
 	pointer-events: none;
 }
 
+/* Smooth sortable: a lifted clone follows the cursor; the original becomes a
+ * dashed gap, and siblings FLIP-animate out of the way (inline transition set
+ * in JS during the drag). */
+body.fw-live-editor-frame-active .fw-le-drag-clone {
+	max-height: 50vh;
+	overflow: hidden;
+	opacity: .92;
+	border-radius: 4px;
+	outline: 2px solid #4f8cff;
+	box-shadow: 0 16px 40px rgba( 0, 0, 0, .35 );
+	background: #fff;
+}
+
+body.fw-live-editor-frame-active .fw-le-drag-placeholder {
+	opacity: 1 !important;
+	background: rgba( 79, 140, 255, .07 ) !important;
+	outline: 2px dashed #4f8cff !important;
+	outline-offset: -2px;
+}
+
+body.fw-live-editor-frame-active .fw-le-drag-placeholder > * { visibility: hidden !important; }
+
 /* While dragging, suppress text selection + show the grabbing cursor everywhere. */
 html.fw-le-drag-active,
 html.fw-le-drag-active * {

@@ -106,6 +106,29 @@
 		{ cols: [ '1_6', '1_6', '1_6', '1_6', '1_6', '1_6' ], parts: [ 2, 2, 2, 2, 2, 2 ] }
 	];
 
+	/** Index of the top-level item whose unique_id is `id` (or -1). */
+	function indexOfId( arr, id ) {
+		for ( var i = 0; i < arr.length; i++ ) {
+			var it = arr[ i ];
+			var iid = ( it && it.atts && it.atts.unique_id ) || ( it && it.unique_id );
+			if ( iid === id ) { return i; }
+		}
+		return -1;
+	}
+
+	/** Nav label + type badge for a top-level (section) item. The label is the
+	 *  section's CSS ID (its name/anchor) if set, else a positional "Section N".
+	 *  The badge is shown only for non-standard section types. */
+	function sectionMeta( item, index ) {
+		var type = item.type;
+		var badge = type === 'bleed_section' ? 'Bleed'
+			: type === 'masonry_section' ? 'Masonry'
+			: /section$/.test( type || '' ) ? '' // Standard → no badge
+			: titleize( type );
+		var name = ( item.atts && item.atts.css_id ) ? String( item.atts.css_id ).trim() : '';
+		return { label: name || ( 'Section ' + ( index + 1 ) ), badge: badge, named: !! name };
+	}
+
 	/** A fresh 32-hex builder unique_id (same shape the builder uses). */
 	function generateUid() {
 		if ( window.crypto && window.crypto.getRandomValues ) {
@@ -297,16 +320,24 @@
 				'</button>'
 			).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
 			this.$.addBtn.on( 'click', function () { $( 'body' ).toggleClass( 'fw-le-panel-open' ); } );
+			// Section structure picker stays available — reached from the in-canvas
+			// "+ Add Section" zone (and the blank-page empty state), so no redundant
+			// toolbar button competing with the "Sections" navigator below.
+			this.buildStructurePicker();
 
-			// "Add Section" — opens the structure picker (choose a column layout +
-			// section type), then inserts that section at the end of the page.
-			this.$.sectionBtn = $(
-				'<button type="button" id="fw-le-add-section" class="fw-le-btn fw-le-btn--ghost">' +
-					'<span class="dashicons dashicons-screenoptions"></span> ' + ( ( cfg.l10n && cfg.l10n.addSection ) || 'Section' ) +
+			// "Sections" — a navigator panel listing every section: click to jump,
+			// drag to reorder, double-click to rename (invaluable on long pages).
+			this.$.navBtn = $(
+				'<button type="button" id="fw-le-nav-btn" class="fw-le-btn fw-le-btn--ghost">' +
+					'<span class="dashicons dashicons-menu-alt"></span> ' + ( ( cfg.l10n && cfg.l10n.navigator ) || 'Sections' ) +
 				'</button>'
 			).insertAfter( this.$.addBtn );
-			this.$.sectionBtn.on( 'click', function () { self.openStructurePicker(); } );
-			this.buildStructurePicker();
+			this.$.navBtn.on( 'click', function () {
+				var open = ! $( 'body' ).hasClass( 'fw-le-nav-open' );
+				$( 'body' ).removeClass( 'fw-le-panel-open' ).toggleClass( 'fw-le-nav-open', open );
+				if ( open ) { self.refreshNavigator(); }
+			} );
+			this.buildNavigator();
 
 			var $panel = $(
 				'<aside id="fw-le-panel">' +
@@ -505,6 +536,7 @@
 				self.markDirty();
 				self.syncFrameModel();
 				self.toFrame( 'insert-section', { html: resp.data.html, id: id, afterId: afterId } );
+				self.refreshNavigator();
 
 				$( 'body' ).addClass( 'fw-le-panel-open' );
 			} );
@@ -597,6 +629,229 @@
 					}
 				} );
 			} );
+		},
+
+		/* ---- section navigator ----------------------------------------- */
+
+		buildNavigator: function () {
+			var self = this;
+			var l10n = cfg.l10n || {};
+			var $nav = this.$.nav = $(
+				'<aside id="fw-le-nav">' +
+					'<div class="fw-le-panel__head"><strong>' + ( l10n.navigator || 'Sections' ) + '</strong>' +
+						'<button type="button" class="fw-le-panel__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-nav__body"></div>' +
+				'</aside>'
+			).appendTo( '#fw-live-editor-app' );
+
+			$nav.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-nav-open' ); } );
+
+			var $body = $nav.find( '.fw-le-nav__body' );
+
+			// Click a row → jump to that section in the canvas.
+			$body.on( 'click', '.fw-le-nav__item', function ( e ) {
+				if ( e.target.closest( '.fw-le-nav__grip' ) || e.target.closest( '.fw-le-nav__rename' ) ) { return; }
+				self.toFrame( 'select-item', { id: this.getAttribute( 'data-id' ) } );
+			} );
+
+			// Double-click the label → rename the section (writes its CSS ID, which
+			// the section view renders as a normalized HTML id/anchor).
+			$body.on( 'dblclick', '.fw-le-nav__label', function ( e ) {
+				e.stopPropagation();
+				self.renameSection( this.closest( '.fw-le-nav__item' ), this );
+			} );
+
+			// Pointer-based reorder from the grip (HTML5 DnD proved unreliable here).
+			$body.on( 'pointerdown', '.fw-le-nav__grip', function ( e ) {
+				e.preventDefault();
+				self.startNavDrag( this.closest( '.fw-le-nav__item' ), this, e );
+			} );
+		},
+
+		startNavDrag: function ( row, grip, e ) {
+			if ( ! row ) { return; }
+			var self = this;
+			// Bind to window (not the grip): the row — and the grip inside it — get
+			// moved in the DOM during the drag, which drops pointer-capture and would
+			// otherwise lose the pointerup. The cursor stays in the panel, so window
+			// catches every move/up reliably.
+			var d = this._navDrag = {
+				row: row, id: row.getAttribute( 'data-id' ),
+				startY: e.clientY, started: false, clone: null, grabDY: 0
+			};
+			d.move = function ( ev ) { self.onNavDragMove( ev ); };
+			d.up   = function ( ev ) { self.onNavDragUp( ev ); };
+			window.addEventListener( 'pointermove', d.move, true );
+			window.addEventListener( 'pointerup', d.up, true );
+			window.addEventListener( 'pointercancel', d.up, true );
+		},
+
+		onNavDragMove: function ( e ) {
+			var d = this._navDrag;
+			if ( ! d ) { return; }
+
+			// Begin only after a small threshold (so a click on the grip still works).
+			if ( ! d.started ) {
+				if ( Math.abs( e.clientY - d.startY ) < 4 ) { return; }
+				d.started = true;
+
+				var rect = d.row.getBoundingClientRect();
+				d.grabDY = e.clientY - rect.top;
+
+				// A floating clone follows the cursor (the "lifted" block); the
+				// original row stays in the list as a faded placeholder gap.
+				var clone = d.clone = d.row.cloneNode( true );
+				clone.className = d.row.className + ' fw-le-nav__clone';
+				clone.style.cssText = 'position:fixed; left:' + rect.left + 'px; width:' + rect.width +
+					'px; margin:0; pointer-events:none; z-index:100002;';
+				document.body.appendChild( clone );
+				d.row.classList.add( 'fw-le-nav__placeholder' );
+			}
+
+			d.clone.style.top = ( e.clientY - d.grabDY ) + 'px';
+			this.navReorder( e.clientY );
+		},
+
+		/** Slide the placeholder gap to where the cursor is, FLIP-animating the rows
+		 *  that shift so they smoothly move out of the way. */
+		navReorder: function ( clientY ) {
+			var d = this._navDrag;
+			var $body = this.$.nav.find( '.fw-le-nav__body' );
+			var items = $body.children( '.fw-le-nav__item' ).toArray();
+
+			// Where should the gap go? Before the first row whose midpoint is below
+			// the cursor (skip the placeholder itself); else the end.
+			var ref = null;
+			for ( var i = 0; i < items.length; i++ ) {
+				if ( items[ i ] === d.row ) { continue; }
+				var r = items[ i ].getBoundingClientRect();
+				if ( clientY < r.top + r.height / 2 ) { ref = items[ i ]; break; }
+			}
+			// No-op if the placeholder is already there.
+			if ( ref === d.row.nextElementSibling || ( ref === null && ! d.row.nextElementSibling ) ) { return; }
+
+			// FLIP: record tops, move, then animate each row from old → new.
+			var firsts = items.map( function ( it ) { return { el: it, top: it.getBoundingClientRect().top }; } );
+			if ( ref ) { d.row.parentNode.insertBefore( d.row, ref ); }
+			else { d.row.parentNode.appendChild( d.row ); }
+			firsts.forEach( function ( f ) {
+				var delta = f.top - f.el.getBoundingClientRect().top;
+				if ( ! delta ) { return; }
+				f.el.style.transition = 'none';
+				f.el.style.transform = 'translateY(' + delta + 'px)';
+				window.requestAnimationFrame( function () {
+					f.el.style.transition = 'transform .16s ease';
+					f.el.style.transform = '';
+				} );
+			} );
+		},
+
+		onNavDragUp: function () {
+			var d = this._navDrag;
+			if ( ! d ) { return; }
+			window.removeEventListener( 'pointermove', d.move, true );
+			window.removeEventListener( 'pointerup', d.up, true );
+			window.removeEventListener( 'pointercancel', d.up, true );
+			this._navDrag = null;
+
+			if ( d.clone && d.clone.parentNode ) { d.clone.parentNode.removeChild( d.clone ); }
+			d.row.classList.remove( 'fw-le-nav__placeholder' );
+			this.$.nav.find( '.fw-le-nav__item' ).css( { transition: '', transform: '' } );
+			if ( ! d.started ) { return; }
+
+			// The placeholder is already in its final slot — commit that order.
+			var next = d.row.nextElementSibling;
+			var beforeId = next ? next.getAttribute( 'data-id' ) : null;
+			this.moveSectionTo( d.id, beforeId );
+		},
+
+		/** Rebuild the navigator list from the current model order. */
+		refreshNavigator: function () {
+			if ( ! this.$.nav ) { return; }
+			var $body = this.$.nav.find( '.fw-le-nav__body' ).empty();
+			this.model.forEach( function ( item, idx ) {
+				var id = ( item.atts && item.atts.unique_id ) || item.unique_id;
+				if ( ! id ) { return; }
+				var info = sectionMeta( item, idx );
+				var $row = $(
+					'<div class="fw-le-nav__item">' +
+						'<span class="fw-le-nav__grip dashicons dashicons-menu" title="Drag to reorder"></span>' +
+						'<span class="fw-le-nav__label"></span>' +
+						'<span class="fw-le-nav__type"></span>' +
+					'</div>'
+				).attr( 'data-id', id );
+				var $label = $row.find( '.fw-le-nav__label' )
+					.text( info.label )
+					.attr( 'title', ( cfg.l10n && cfg.l10n.renameTip ) || 'Double-click to rename' );
+				if ( ! info.named ) { $label.addClass( 'fw-le-nav__label--placeholder' ); }
+				if ( info.badge ) { $row.find( '.fw-le-nav__type' ).text( info.badge ); }
+				else { $row.find( '.fw-le-nav__type' ).remove(); }
+				$body.append( $row );
+			} );
+			if ( ! this.model.length ) {
+				$body.append( '<div class="fw-le-nav__empty">' + ( ( cfg.l10n && cfg.l10n.noSections ) || 'No sections yet.' ) + '</div>' );
+			}
+		},
+
+		/** Inline-rename a section from the navigator. The typed text is stored
+		 *  verbatim as the section's CSS ID (so the modal Advanced tab shows it as
+		 *  typed); the section view emits it as a normalized `id` (lowercase,
+		 *  spaces → dashes). Re-renders the section so the new id takes effect. */
+		renameSection: function ( rowEl, labelEl ) {
+			if ( ! rowEl ) { return; }
+			var id = rowEl.getAttribute( 'data-id' );
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+
+			var self = this;
+			var current = ( node.atts && node.atts.css_id ) || '';
+			var $input = $( '<input type="text" class="fw-le-nav__rename" />' )
+				.val( current )
+				.attr( 'placeholder', 'Section name…' );
+			$( labelEl ).replaceWith( $input );
+			$input.trigger( 'focus' ).trigger( 'select' );
+
+			var done = false;
+			var commit = function ( save ) {
+				if ( done ) { return; }
+				done = true;
+				if ( save ) {
+					var val = $.trim( $input.val() );
+					if ( ! node.atts ) { node.atts = {}; }
+					if ( ( node.atts.css_id || '' ) !== val ) {
+						self.recordHistory();
+						node.atts.css_id = val;
+						self.markDirty();
+						self.renderItem( id ); // re-render so the output id updates
+					}
+				}
+				self.refreshNavigator();
+			};
+
+			$input.on( 'blur', function () { commit( true ); } );
+			$input.on( 'keydown', function ( ev ) {
+				if ( ev.key === 'Enter' ) { ev.preventDefault(); commit( true ); }
+				else if ( ev.key === 'Escape' ) { ev.preventDefault(); commit( false ); }
+			} );
+		},
+
+		/** Reorder a top-level section to sit before `beforeId` (or end if null). */
+		moveSectionTo: function ( id, beforeId ) {
+			if ( ! id || id === beforeId ) { return; }
+			var fromIdx = indexOfId( this.model, id );
+			if ( fromIdx < 0 ) { return; }
+
+			this.recordHistory();
+			var node = this.model.splice( fromIdx, 1 )[ 0 ];
+			var toIdx = beforeId ? indexOfId( this.model, beforeId ) : this.model.length;
+			if ( toIdx < 0 ) { toIdx = this.model.length; }
+			this.model.splice( toIdx, 0, node );
+
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+			this.toFrame( 'move-section', { id: id, beforeId: beforeId || null } );
+			this.refreshNavigator();
 		},
 
 		/* ---- pointer-capture drag from the panel ----------------------- */
@@ -841,6 +1096,7 @@
 			this.rebuildIndex();
 			this.markDirty();
 			this.syncFrameModel();
+			this.refreshNavigator();
 
 			var self = this;
 			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( clone ) }, function ( resp ) {
@@ -864,6 +1120,7 @@
 			this.rebuildIndex();
 			this.markDirty();
 			this.syncFrameModel();
+			this.refreshNavigator();
 			this.toFrame( 'remove', { id: id } );
 		},
 
@@ -935,13 +1192,37 @@
 			this.toFrame( 'init', { model: this.model } );
 		},
 
+		/** Reflect the canvas selection as a clickable breadcrumb of the item's
+		 *  ancestor chain (Section ▸ Column ▸ Element). Clicking a crumb selects
+		 *  that ancestor — a quick way to step up from a nested element to its
+		 *  column or section. */
 		onSelect: function ( payload ) {
-			var label = ( payload && payload.label ) || '';
-			if ( ! this.$.selected ) {
-				this.$.selected = $( '<span class="fw-le-selected" />' )
+			var self = this;
+			if ( ! this.$.breadcrumb ) {
+				this.$.breadcrumb = $( '<span class="fw-le-breadcrumb" />' )
 					.appendTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
+				this.$.breadcrumb.on( 'click', '.fw-le-crumb:not(.is-active)', function () {
+					self.toFrame( 'select-item', { id: this.getAttribute( 'data-id' ), scroll: false } );
+				} );
 			}
-			this.$.selected.text( label ? ( '▸ ' + label ) : '' );
+
+			this.$.breadcrumb.empty();
+			var id = payload && payload.id;
+			if ( ! id || ! this.index[ id ] ) { return; }
+
+			// Walk parentIds (root → selected).
+			var chain = [], cur = id, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				chain.unshift( { id: cur, label: labelFor( this.index[ cur ].node ) } );
+				cur = this.index[ cur ].parentId;
+			}
+
+			chain.forEach( function ( c, i ) {
+				self.$.breadcrumb.append( '<span class="fw-le-crumb-sep">▸</span>' );
+				var $c = $( '<button type="button" class="fw-le-crumb" />' ).attr( 'data-id', c.id ).text( c.label );
+				if ( i === chain.length - 1 ) { $c.addClass( 'is-active' ); }
+				self.$.breadcrumb.append( $c );
+			} );
 		},
 
 		/* ---- editing (Phase 2) ----------------------------------------- */
@@ -1077,6 +1358,7 @@
 			this.rebuildIndex();
 			this.markDirty();
 			this.refreshUndoRedo();
+			this.refreshNavigator();
 			this.renderPageToCanvas();
 		},
 

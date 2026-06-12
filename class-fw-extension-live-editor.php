@@ -423,6 +423,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'addSectionHere' => __( 'Add Section', 'fw' ),
 				'selectImage'  => __( 'Select Image', 'fw' ),
 				'useImage'     => __( 'Use this image', 'fw' ),
+				'navigator'    => __( 'Sections', 'fw' ),
+				'noSections'   => __( 'No sections yet.', 'fw' ),
+				'renameTip'    => __( 'Double-click to rename', 'fw' ),
 			),
 		) );
 	}

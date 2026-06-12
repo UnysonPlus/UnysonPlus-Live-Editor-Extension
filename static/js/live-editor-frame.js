@@ -205,6 +205,10 @@
 				this.renderPage( data.payload );
 			} else if ( data.type === 'reflow' ) {
 				this.reposition();
+			} else if ( data.type === 'select-item' ) {
+				this.focusItem( data.payload && data.payload.id, ! data.payload || data.payload.scroll !== false );
+			} else if ( data.type === 'move-section' ) {
+				this.moveSection( data.payload );
 			} else if ( data.type === 'add-dragover' ) {
 				this.pointerAddOver( data.payload );
 			} else if ( data.type === 'add-drop' ) {
@@ -461,16 +465,28 @@
 		beginDrag: function () {
 			var d = this.drag;
 			d.started = true;
-			if ( ! d.isLeaf && ! d.isColumn ) {
-				// Sections reorder among same-parent siblings (precomputed list).
-				d.siblings = Array.prototype.filter.call( d.container.children, function ( c ) {
-					return c.nodeType === 1 && c.hasAttribute( 'data-fw-item-id' );
-				} );
-				d.horizontal = this.detectHorizontal( d.siblings );
-			}
-			// Leaves (any column under the pointer) and columns (any section under
-			// the pointer) are resolved per-move, so they need no precomputed list.
-			d.el.classList.add( 'fw-le-dragging' );
+
+			var rect = d.el.getBoundingClientRect();
+			d.cloneBaseLeft = rect.left;
+			d.cloneBaseTop  = rect.top;
+			d.flipped = [];
+
+			// A lifted clone follows the cursor (by delta from the grab point); the
+			// original element becomes a faded placeholder gap that slides to the drop
+			// position while siblings FLIP-animate out of the way.
+			var clone = d.clone = d.el.cloneNode( true );
+			clone.removeAttribute( 'data-fw-item-id' );
+			var inner = clone.querySelectorAll( '[data-fw-item-id]' );
+			for ( var i = 0; i < inner.length; i++ ) { inner[ i ].removeAttribute( 'data-fw-item-id' ); }
+			clone.classList.add( 'fw-le-drag-clone' );
+			clone.style.cssText = 'position:fixed; margin:0; left:' + rect.left + 'px; top:' + rect.top +
+				'px; width:' + rect.width + 'px; pointer-events:none; z-index:2147483002;';
+			document.body.appendChild( clone );
+
+			d.el.classList.add( 'fw-le-dragging' );        // pointer-events:none for elementFromPoint
+			d.el.classList.add( 'fw-le-drag-placeholder' ); // styled as a gap
+			d.el.style.height = rect.height + 'px';        // keep the gap's size when content hides
+
 			this.els.activeBox.style.display = 'none';
 			this.els.hoverBox.style.display = 'none';
 			document.documentElement.classList.add( 'fw-le-drag-active' );
@@ -495,14 +511,99 @@
 				this.beginDrag();
 			}
 			e.preventDefault();
+
+			// Clone follows the cursor.
+			d.clone.style.left = ( d.cloneBaseLeft + ( e.clientX - d.startX ) ) + 'px';
+			d.clone.style.top  = ( d.cloneBaseTop + ( e.clientY - d.startY ) ) + 'px';
+
+			// Resolve where the placeholder should sit, then slide it there.
+			var t = null;
 			if ( d.isLeaf ) {
-				this.computeLeafDrop( e.clientX, e.clientY );
+				var lt = this.leafDropAt( e.clientX, e.clientY, d.el );
+				if ( lt && lt.col ) {
+					var parent = lt.before ? lt.before.parentNode
+						: ( lt.leaves.length ? lt.leaves[ lt.leaves.length - 1 ].parentNode : lt.col );
+					t = { parent: parent, before: lt.before };
+				}
 			} else if ( d.isColumn ) {
-				this.computeColumnDrop( e.clientX, e.clientY );
+				var ct = this.columnDropAt( e.clientX, e.clientY, d.el );
+				if ( ct ) { t = { parent: ct.rowEl, before: ct.before }; }
 			} else {
-				d.before = this.computeDropTarget( e.clientX, e.clientY );
-				this.positionDropline( d.before );
+				t = this.sectionDropAt( e.clientY, d.el );
 			}
+			if ( t && t.parent ) { this.reorderPlaceholder( t.parent, t.before ); }
+		},
+
+		/** Slide the placeholder into { parent, before }, FLIP-animating the
+		 *  source + target containers' children so they move out of the way. */
+		reorderPlaceholder: function ( parent, before ) {
+			var d = this.drag;
+			if ( before === d.el ) { before = null; }
+			if ( d.el.parentNode === parent && d.el.nextElementSibling === ( before || null ) ) { return; }
+
+			var affected = [];
+			var add = function ( p ) {
+				if ( ! p ) { return; }
+				for ( var i = 0; i < p.children.length; i++ ) {
+					if ( affected.indexOf( p.children[ i ] ) === -1 ) { affected.push( p.children[ i ] ); }
+				}
+			};
+			add( d.el.parentNode );
+			add( parent );
+
+			var firsts = affected.map( function ( el ) { return { el: el, r: el.getBoundingClientRect() }; } );
+			parent.insertBefore( d.el, before || null );
+
+			var flipped = d.flipped;
+			firsts.forEach( function ( f ) {
+				var n = f.el.getBoundingClientRect();
+				var dx = f.r.left - n.left, dy = f.r.top - n.top;
+				if ( ! dx && ! dy ) { return; }
+				if ( flipped.indexOf( f.el ) === -1 ) { flipped.push( f.el ); }
+				f.el.style.transition = 'none';
+				f.el.style.transform = 'translate(' + dx + 'px,' + dy + 'px)';
+				window.requestAnimationFrame( function () {
+					f.el.style.transition = 'transform .16s ease';
+					f.el.style.transform = '';
+				} );
+			} );
+		},
+
+		/** Section drop target: the top-level section the cursor is above (or end). */
+		sectionDropAt: function ( y, excludeEl ) {
+			var container = excludeEl.parentNode;
+			var before = null, c = container.firstElementChild;
+			while ( c ) {
+				if ( c !== excludeEl && c.hasAttribute( 'data-fw-item-id' ) &&
+					/section$/.test( ( this.index[ c.getAttribute( 'data-fw-item-id' ) ] || {} ).type || '' ) ) {
+					var r = c.getBoundingClientRect();
+					if ( y < r.top + r.height / 2 ) { before = c; break; }
+				}
+				c = c.nextElementSibling;
+			}
+			// Past the last section → keep it before the "+ Add Section" bar.
+			if ( ! before && this.els.addZone && this.els.addZone.parentNode === container ) {
+				before = this.els.addZone;
+			}
+			return { parent: container, before: before };
+		},
+
+		/** Id of the next sibling item of the given kind after `el` (or null). */
+		nextItemId: function ( el, kind ) {
+			var n = el.nextElementSibling;
+			while ( n ) {
+				if ( n.hasAttribute( 'data-fw-item-id' ) ) {
+					var meta = this.index[ n.getAttribute( 'data-fw-item-id' ) ];
+					if ( meta ) {
+						var ok = kind === 'leaf' ? ! isContainerType( meta.type )
+							: kind === 'column' ? meta.type === 'column'
+							: /section$/.test( meta.type || '' );
+						if ( ok ) { return n.getAttribute( 'data-fw-item-id' ); }
+					}
+				}
+				n = n.nextElementSibling;
+			}
+			return null;
 		},
 
 		/* Leaf drag: target any column under the pointer; insert among its leaves. */
@@ -725,6 +826,40 @@
 			this.ensureSectionAddColZones();
 			this.select( nu, payload.id );
 			nu.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+		},
+
+		/** Select an item by id; optionally scroll it into view (navigator jumps
+		 *  scroll, breadcrumb crumbs don't — the ancestor is already on screen). */
+		focusItem: function ( id, scroll ) {
+			if ( ! id ) { return; }
+			var el = document.querySelector( '[data-fw-item-id="' + id + '"]' );
+			if ( ! el ) { return; }
+			this.select( el, id );
+			if ( scroll ) { el.scrollIntoView( { behavior: 'smooth', block: 'start' } ); }
+		},
+
+		/** Move a section element to sit before `beforeId` (or to the end, before the
+		 *  add-section zone) — the DOM half of a navigator reorder. */
+		moveSection: function ( payload ) {
+			if ( ! payload || ! payload.id ) { return; }
+			var el = document.querySelector( '[data-fw-item-id="' + payload.id + '"]' );
+			if ( ! el ) { return; }
+
+			var ref = payload.beforeId ? document.querySelector( '[data-fw-item-id="' + payload.beforeId + '"]' ) : null;
+			if ( ref && ref.parentNode ) {
+				ref.parentNode.insertBefore( el, ref );
+			} else {
+				var container = this.findSectionsContainer();
+				if ( container ) {
+					if ( this.els.addZone && this.els.addZone.parentNode === container ) {
+						container.insertBefore( el, this.els.addZone );
+					} else {
+						container.appendChild( el );
+					}
+				}
+			}
+			this.ensureAddSectionZone();
+			if ( this.activeId === payload.id ) { this.reposition(); }
 		},
 
 		/** Replace the entire builder content in the canvas with freshly-rendered
@@ -951,50 +1086,41 @@
 
 			if ( ! d.started ) { return; } // it was a click, not a drag
 
-			d.el.classList.remove( 'fw-le-dragging' );
+			// Tear down the clone, un-placeholder the element, clear FLIP transforms.
+			if ( d.clone && d.clone.parentNode ) { d.clone.parentNode.removeChild( d.clone ); }
+			d.el.classList.remove( 'fw-le-dragging', 'fw-le-drag-placeholder' );
+			d.el.style.height = '';
+			if ( d.flipped ) {
+				d.flipped.forEach( function ( el ) { el.style.transition = ''; el.style.transform = ''; } );
+			}
 
+			// The placeholder (d.el) is already in its final slot — commit it. Read
+			// the new container + the next same-kind sibling straight from the DOM.
+			var targetParentId, beforeId, kind;
 			if ( d.isLeaf ) {
-				if ( ! d.targetParentId ) { this.select( d.el, d.id ); return; } // no valid column under pointer
-				// Move the leaf element into the target column's content (works for
-				// the same column AND a different one — the element is self-contained).
-				var content;
-				if ( d.before ) { content = d.before.parentNode; }
-				else if ( d.leaves && d.leaves.length ) { content = d.leaves[ d.leaves.length - 1 ].parentNode; }
-				else { content = d.targetColEl; } // empty column
-				if ( d.before ) { content.insertBefore( d.el, d.before ); }
-				else { content.appendChild( d.el ); }
-				this.markEmptyColumns();
-				this.select( d.el, d.id );
-				this.toShell( 'move-item', {
-					id: d.id, targetParentId: d.targetParentId,
-					beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
-				} );
-				return;
+				kind = 'leaf';
+				var col = this.nearestColumnEl( d.el );
+				targetParentId = col ? col.getAttribute( 'data-fw-item-id' ) : null;
+			} else if ( d.isColumn ) {
+				kind = 'column';
+				var sec = this.nearestSectionEl( d.el );
+				targetParentId = sec ? sec.getAttribute( 'data-fw-item-id' ) : null;
+			} else {
+				kind = 'section';
+				targetParentId = null; // sections are top-level
 			}
 
-			if ( d.isColumn ) {
-				if ( ! d.targetSectionId ) { this.select( d.el, d.id ); return; } // no section under pointer
-				// Move the column element into the target section's row (same section
-				// OR a different one).
-				if ( d.before && d.before.parentNode ) { d.before.parentNode.insertBefore( d.el, d.before ); }
-				else if ( d.targetRowEl ) { d.targetRowEl.appendChild( d.el ); }
-				this.markEmptyColumns();
-				this.ensureSectionAddColZones();
-				this.select( d.el, d.id );
-				this.toShell( 'move-item', {
-					id: d.id, targetParentId: d.targetSectionId,
-					beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
-				} );
+			if ( ( d.isLeaf || d.isColumn ) && ! targetParentId ) {
+				this.select( d.el, d.id ); // dropped nowhere valid — leave as-is
 				return;
 			}
+			beforeId = this.nextItemId( d.el, kind );
 
-			// Section (or row) reorder among same-parent siblings.
-			d.container.insertBefore( d.el, d.before || null );
+			this.markEmptyColumns();
+			this.ensureSectionAddColZones();
+			this.ensureAddSectionZone();
 			this.select( d.el, d.id );
-			this.toShell( 'move-item', {
-				id: d.id, targetParentId: d.targetParentId,
-				beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
-			} );
+			this.toShell( 'move-item', { id: d.id, targetParentId: targetParentId, beforeId: beforeId } );
 		},
 
 		/** Swap a re-rendered item's HTML into the canvas, keeping it selected. */
