@@ -183,6 +183,9 @@
 				case 'delete-request':
 					this.confirmDelete( data.payload );
 					break;
+				case 'move-item':
+					this.moveItem( data.payload );
+					break;
 				default:
 					break;
 			}
@@ -301,6 +304,55 @@
 			this.markDirty();
 			this.syncFrameModel();
 			this.toFrame( 'remove', { id: id } );
+		},
+
+		/** Move an item within OR across containers (Phase B/C). The frame already
+		 *  moved the DOM node; here we mirror the move in the model. payload:
+		 *  { id, targetParentId (the new parent item id, or null = page root),
+		 *    beforeId (sibling it now sits before, or null = end) }. */
+		moveItem: function ( payload ) {
+			payload = payload || {};
+			var entry = payload.id && this.index[ payload.id ];
+			if ( ! entry ) { return; }
+
+			var node        = entry.node;
+			var oldSiblings = entry.siblings;
+			var from        = oldSiblings.indexOf( node );
+			if ( from < 0 ) { return; }
+
+			// Resolve the destination array (the new parent's _items, or the root).
+			var targetParent = payload.targetParentId ? this.index[ payload.targetParentId ] : null;
+			var targetSiblings;
+			if ( payload.targetParentId ) {
+				if ( ! targetParent ) { this.log( 'move: unknown target parent', payload.targetParentId ); return; }
+				if ( ! targetParent.node._items ) { targetParent.node._items = []; }
+				targetSiblings = targetParent.node._items;
+			} else {
+				targetSiblings = this.model;
+			}
+
+			var sameContainer = ( targetSiblings === oldSiblings );
+
+			var insertAt;
+			if ( payload.beforeId && this.index[ payload.beforeId ] ) {
+				insertAt = targetSiblings.indexOf( this.index[ payload.beforeId ].node );
+				if ( insertAt < 0 ) { insertAt = targetSiblings.length; }
+			} else {
+				insertAt = targetSiblings.length;
+			}
+
+			oldSiblings.splice( from, 1 );
+			if ( sameContainer && insertAt > from ) { insertAt--; }
+			if ( sameContainer && insertAt === from ) {
+				oldSiblings.splice( from, 0, node ); // back where it was → no change
+				return;
+			}
+
+			targetSiblings.splice( insertAt, 0, node );
+
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
 		},
 
 		onFrameReady: function () {

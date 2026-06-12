@@ -110,3 +110,35 @@ body.fw-live-editor-frame-active [data-fw-item-id] {
 #fw-le-overlay .fw-le-tag__btn--danger:hover {
 	background: #e2483d;
 }
+
+#fw-le-overlay .fw-le-act-drag {
+	cursor: grab;
+}
+
+/* ---- Drag-to-reorder ------------------------------------------------------ */
+
+#fw-le-dropline {
+	position: fixed;
+	z-index: 2147483001;
+	background: #4f8cff;
+	border-radius: 2px;
+	pointer-events: none;
+	box-shadow: 0 0 0 1px rgba( 79, 140, 255, .35 ), 0 0 6px rgba( 79, 140, 255, .5 );
+}
+
+#fw-le-dropline.fw-le-dropline--h { height: 3px; }
+#fw-le-dropline.fw-le-dropline--v { width: 3px; }
+
+body.fw-live-editor-frame-active .fw-le-dragging {
+	opacity: .45;
+	/* Let elementFromPoint see the column underneath while dragging a leaf. */
+	pointer-events: none;
+}
+
+/* While dragging, suppress text selection + show the grabbing cursor everywhere. */
+html.fw-le-drag-active,
+html.fw-le-drag-active * {
+	cursor: grabbing !important;
+	user-select: none !important;
+	-webkit-user-select: none !important;
+}

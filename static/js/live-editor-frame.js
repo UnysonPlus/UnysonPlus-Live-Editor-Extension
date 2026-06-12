@@ -43,6 +43,10 @@
 		return LEAF_LABELS[ sc ] || titleize( sc );
 	}
 
+	function isContainerType( t ) {
+		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
+	}
+
 	var fwLiveEditorFrame = {
 		config: window._fwLiveEditorFrame || {},
 
@@ -176,6 +180,214 @@
 			this.toShell( 'select', { id: null, type: null, label: '' } );
 		},
 
+		/* ---- drag to reorder (Phase B) --------------------------------- */
+
+		startDrag: function ( e ) {
+			if ( ! this.activeEl ) { return; }
+			e.preventDefault();
+			e.stopPropagation();
+
+			var self = this;
+			var meta = this.index[ this.activeId ] || {};
+			var d = this.drag = {
+				el:             this.activeEl,
+				id:             this.activeId,
+				container:      this.activeEl.parentNode,
+				isLeaf:         ! isContainerType( meta.type ),
+				parentId:       meta.parentId || null,
+				targetParentId: meta.parentId || null,
+				startX:         e.clientX,
+				startY:         e.clientY,
+				started:        false,
+				before:         null
+			};
+			d.move = function ( ev ) { self.onDragMove( ev ); };
+			d.up   = function ( ev ) { self.onDragUp( ev ); };
+			window.addEventListener( 'pointermove', d.move, true );
+			window.addEventListener( 'pointerup', d.up, true );
+			window.addEventListener( 'pointercancel', d.up, true );
+		},
+
+		beginDrag: function () {
+			var d = this.drag;
+			d.started = true;
+			if ( ! d.isLeaf ) {
+				// Containers (columns / sections) reorder among same-parent siblings.
+				d.siblings = Array.prototype.filter.call( d.container.children, function ( c ) {
+					return c.nodeType === 1 && c.hasAttribute( 'data-fw-item-id' );
+				} );
+				d.horizontal = this.detectHorizontal( d.siblings );
+			}
+			// Leaves are resolved against whichever column is under the pointer
+			// (cross-column moves), so they need no precomputed sibling list.
+			d.el.classList.add( 'fw-le-dragging' );
+			this.els.activeBox.style.display = 'none';
+			this.els.hoverBox.style.display = 'none';
+			document.documentElement.classList.add( 'fw-le-drag-active' );
+		},
+
+		detectHorizontal: function ( siblings ) {
+			var real = siblings.filter( function ( s ) { return true; } );
+			if ( real.length < 2 ) {
+				// Single item: fall back to the container's flex direction.
+				var cs = window.getComputedStyle( this.drag.container );
+				return cs.display.indexOf( 'flex' ) !== -1 && cs.flexDirection.indexOf( 'row' ) === 0;
+			}
+			var a = real[ 0 ].getBoundingClientRect(), b = real[ 1 ].getBoundingClientRect();
+			return Math.abs( a.top - b.top ) < Math.min( a.height, b.height ) / 2;
+		},
+
+		onDragMove: function ( e ) {
+			var d = this.drag;
+			if ( ! d ) { return; }
+			if ( ! d.started ) {
+				if ( Math.abs( e.clientX - d.startX ) + Math.abs( e.clientY - d.startY ) < 5 ) { return; }
+				this.beginDrag();
+			}
+			e.preventDefault();
+			if ( d.isLeaf ) {
+				this.computeLeafDrop( e.clientX, e.clientY );
+			} else {
+				d.before = this.computeDropTarget( e.clientX, e.clientY );
+				this.positionDropline( d.before );
+			}
+		},
+
+		/* Leaf drag: target any column under the pointer; insert among its leaves. */
+		computeLeafDrop: function ( x, y ) {
+			var d = this.drag;
+			var under = document.elementFromPoint( x, y );
+			var col = under ? this.nearestColumnEl( under ) : null;
+			if ( ! col ) { d.targetParentId = null; this.els.dropline.style.display = 'none'; return; }
+
+			var leaves = this.leafChildrenOf( col, d.el );
+			var before = null;
+			for ( var i = 0; i < leaves.length; i++ ) {
+				var r = leaves[ i ].getBoundingClientRect();
+				if ( y < r.top + r.height / 2 ) { before = leaves[ i ]; break; }
+			}
+			d.targetParentId = col.getAttribute( 'data-fw-item-id' );
+			d.targetColEl = col;
+			d.leaves = leaves;
+			d.before = before;
+
+			var line = this.els.dropline, cr = col.getBoundingClientRect();
+			line.style.display = 'block';
+			line.className = 'fw-le-dropline--h';
+			line.style.left = cr.left + 'px';
+			line.style.width = cr.width + 'px';
+			line.style.height = '';
+			line.style.top = ( before
+				? before.getBoundingClientRect().top - 3
+				: ( leaves.length ? leaves[ leaves.length - 1 ].getBoundingClientRect().bottom + 1 : cr.top + 6 )
+			) + 'px';
+		},
+
+		nearestColumnEl: function ( el ) {
+			var node = el;
+			while ( node && node !== document.body ) {
+				if ( node.nodeType === 1 && node.hasAttribute && node.hasAttribute( 'data-fw-item-id' ) ) {
+					var meta = this.index[ node.getAttribute( 'data-fw-item-id' ) ];
+					if ( meta && meta.type === 'column' ) { return node; }
+				}
+				node = node.parentNode;
+			}
+			return null;
+		},
+
+		/** Leaf elements whose nearest column ancestor is `colEl` (excludes one). */
+		leafChildrenOf: function ( colEl, excludeEl ) {
+			var all = colEl.querySelectorAll( '[data-fw-item-id]' ), out = [];
+			for ( var i = 0; i < all.length; i++ ) {
+				var el = all[ i ];
+				if ( el === excludeEl ) { continue; }
+				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
+				if ( ! meta || isContainerType( meta.type ) ) { continue; }
+				if ( this.nearestColumnEl( el ) === colEl ) { out.push( el ); }
+			}
+			return out;
+		},
+
+		computeDropTarget: function ( x, y ) {
+			var d = this.drag;
+			var pos = d.horizontal ? x : y;
+			for ( var i = 0; i < d.siblings.length; i++ ) {
+				var s = d.siblings[ i ];
+				if ( s === d.el ) { continue; }
+				var r = s.getBoundingClientRect();
+				var mid = d.horizontal ? ( r.left + r.width / 2 ) : ( r.top + r.height / 2 );
+				if ( pos < mid ) { return s; }
+			}
+			return null; // past the last sibling → append
+		},
+
+		positionDropline: function ( before ) {
+			var d = this.drag, line = this.els.dropline;
+			var cr = d.container.getBoundingClientRect();
+			line.style.display = 'block';
+			line.className = d.horizontal ? 'fw-le-dropline--v' : 'fw-le-dropline--h';
+
+			// Reference rect: the gap before `before`, or after the last non-dragged sibling.
+			var refRect, atEnd = false;
+			if ( before ) {
+				refRect = before.getBoundingClientRect();
+			} else {
+				var last = null;
+				for ( var i = d.siblings.length - 1; i >= 0; i-- ) {
+					if ( d.siblings[ i ] !== d.el ) { last = d.siblings[ i ]; break; }
+				}
+				refRect = last ? last.getBoundingClientRect() : cr;
+				atEnd = true;
+			}
+
+			if ( d.horizontal ) {
+				line.style.top = cr.top + 'px';
+				line.style.height = cr.height + 'px';
+				line.style.width = '';
+				line.style.left = ( atEnd ? refRect.right + 1 : refRect.left - 3 ) + 'px';
+			} else {
+				line.style.left = cr.left + 'px';
+				line.style.width = cr.width + 'px';
+				line.style.height = '';
+				line.style.top = ( atEnd ? refRect.bottom + 1 : refRect.top - 3 ) + 'px';
+			}
+		},
+
+		onDragUp: function () {
+			var d = this.drag;
+			if ( ! d ) { return; }
+			window.removeEventListener( 'pointermove', d.move, true );
+			window.removeEventListener( 'pointerup', d.up, true );
+			window.removeEventListener( 'pointercancel', d.up, true );
+			this.drag = null;
+
+			this.els.dropline.style.display = 'none';
+			document.documentElement.classList.remove( 'fw-le-drag-active' );
+
+			if ( ! d.started ) { return; } // it was a click, not a drag
+
+			d.el.classList.remove( 'fw-le-dragging' );
+
+			if ( d.isLeaf ) {
+				if ( ! d.targetParentId ) { this.select( d.el, d.id ); return; } // no valid column under pointer
+				// Move the leaf element into the target column's content (works for
+				// the same column AND a different one — the element is self-contained).
+				var content;
+				if ( d.before ) { content = d.before.parentNode; }
+				else if ( d.leaves && d.leaves.length ) { content = d.leaves[ d.leaves.length - 1 ].parentNode; }
+				else { content = d.targetColEl; } // empty column
+				if ( d.before ) { content.insertBefore( d.el, d.before ); }
+				else { content.appendChild( d.el ); }
+			} else {
+				d.container.insertBefore( d.el, d.before || null );
+			}
+
+			this.select( d.el, d.id );
+
+			var beforeId = ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null;
+			this.toShell( 'move-item', { id: d.id, targetParentId: d.targetParentId, beforeId: beforeId } );
+		},
+
 		/** Swap a re-rendered item's HTML into the canvas, keeping it selected. */
 		replaceItem: function ( payload ) {
 			if ( ! payload || ! payload.id ) { return; }
@@ -225,6 +437,7 @@
 			if ( this.els.root ) { return; }
 
 			var SVG = {
+				drag:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="6" cy="3.5" r="1.1" fill="currentColor"/><circle cx="10" cy="3.5" r="1.1" fill="currentColor"/><circle cx="6" cy="8" r="1.1" fill="currentColor"/><circle cx="10" cy="8" r="1.1" fill="currentColor"/><circle cx="6" cy="12.5" r="1.1" fill="currentColor"/><circle cx="10" cy="12.5" r="1.1" fill="currentColor"/></svg>',
 				up:    '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 10l4-4 4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 				copy:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 				edit:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M10.5 3l2.5 2.5-7 7-3 .5.5-3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
@@ -238,13 +451,15 @@
 				'<div class="fw-le-box fw-le-box--hover"></div>' +
 				'<div class="fw-le-box fw-le-box--active">' +
 					'<div class="fw-le-tag">' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-drag" title="Drag to reorder">' + SVG.drag + '</button>' +
 						'<span class="fw-le-tag__label"></span>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-parent" title="Select parent">' + SVG.up + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-duplicate" title="Duplicate">' + SVG.copy + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-edit" title="Edit">' + SVG.edit + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-tag__btn--danger fw-le-act-delete" title="Delete">' + SVG.trash + '</button>' +
 					'</div>' +
-				'</div>';
+				'</div>' +
+				'<div id="fw-le-dropline" style="display:none"></div>';
 
 			document.body.appendChild( root );
 
@@ -252,6 +467,7 @@
 			this.els.hoverBox  = root.querySelector( '.fw-le-box--hover' );
 			this.els.activeBox = root.querySelector( '.fw-le-box--active' );
 			this.els.activeLbl = root.querySelector( '.fw-le-tag__label' );
+			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
 
 			var self = this;
 			function on( sel, fn ) {
@@ -260,6 +476,10 @@
 					fn();
 				} );
 			}
+			// Drag handle starts a pointer drag (not a click).
+			root.querySelector( '.fw-le-act-drag' ).addEventListener( 'pointerdown', function ( e ) {
+				self.startDrag( e );
+			} );
 			on( '.fw-le-act-parent', function () { self.selectParent(); } );
 			on( '.fw-le-act-duplicate', function () {
 				if ( self.activeId ) { self.toShell( 'duplicate-request', { id: self.activeId } ); }
