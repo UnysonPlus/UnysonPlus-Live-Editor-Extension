@@ -212,6 +212,52 @@
 			this.toShell( 'select', { id: null, type: null, label: '' } );
 		},
 
+		/* ---- inline text editing (double-click) ------------------------ */
+
+		onDblClick: function ( e ) {
+			if ( this.editing ) { return; }
+			var hit = this.selectableFrom( e.target );
+			if ( ! hit ) { return; }
+			var meta = this.index[ hit.id ];
+			if ( ! meta || meta.shortcode !== 'text_block' ) { return; } // text blocks only (for now)
+			this.enterInlineEdit( hit.el, hit.id );
+		},
+
+		enterInlineEdit: function ( el, id ) {
+			var self = this;
+			this.editing = { el: el, id: id };
+
+			this.els.activeBox.style.display = 'none';
+			this.els.hoverBox.style.display = 'none';
+
+			el.setAttribute( 'contenteditable', 'true' );
+			el.classList.add( 'fw-le-editing' );
+			el.focus();
+
+			this.editing.onBlur = function () { self.exitInlineEdit(); };
+			this.editing.onKey = function ( ev ) {
+				if ( ev.key === 'Escape' ) { ev.preventDefault(); el.blur(); }
+			};
+			el.addEventListener( 'blur', this.editing.onBlur );
+			el.addEventListener( 'keydown', this.editing.onKey );
+
+			this.log( 'inline edit', id );
+		},
+
+		exitInlineEdit: function () {
+			var ed = this.editing;
+			if ( ! ed ) { return; }
+			this.editing = null;
+
+			ed.el.removeEventListener( 'blur', ed.onBlur );
+			ed.el.removeEventListener( 'keydown', ed.onKey );
+			ed.el.removeAttribute( 'contenteditable' );
+			ed.el.classList.remove( 'fw-le-editing' );
+
+			this.toShell( 'update-text', { id: ed.id, text: ed.el.innerHTML } );
+			this.select( ed.el, ed.id );
+		},
+
 		/* ---- drag to reorder (Phase B) --------------------------------- */
 
 		startDrag: function ( e ) {
@@ -605,11 +651,13 @@
 			var self = this;
 
 			document.addEventListener( 'mouseover', function ( e ) {
+				if ( self.editing ) { return; }
 				var hit = self.selectableFrom( e.target );
 				self.setHover( hit ? hit.el : null );
 			}, false );
 
 			document.addEventListener( 'click', function ( e ) {
+				if ( self.editing ) { return; } // let clicks place the caret while editing
 				if ( e.target.closest && e.target.closest( '#fw-le-overlay' ) ) { return; }
 				var hit = self.selectableFrom( e.target );
 				if ( hit ) {
@@ -618,6 +666,9 @@
 					self.select( hit.el, hit.id );
 				}
 			}, true );
+
+			// Double-click a text block to edit it inline (cursor at the click point).
+			document.addEventListener( 'dblclick', function ( e ) { self.onDblClick( e ); }, false );
 
 			var reflow = function () {
 				if ( self.rafPending ) { return; }

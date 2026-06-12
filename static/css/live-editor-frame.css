@@ -15,6 +15,15 @@ body.fw-live-editor-frame-active {
 	cursor: default;
 }
 
+/* Inline text editing (double-click a text block). */
+body.fw-live-editor-frame-active .fw-le-editing {
+	outline: 2px solid #4f8cff !important;
+	outline-offset: 1px;
+	cursor: text;
+	box-shadow: 0 0 0 4px rgba( 79, 140, 255, .14 );
+	border-radius: 2px;
+}
+
 /* Placeholder for a freshly-added element that renders empty (edit mode only). */
 body.fw-live-editor-frame-active .fw-le-empty-item {
 	padding: 18px;

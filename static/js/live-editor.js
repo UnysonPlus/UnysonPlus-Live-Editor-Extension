@@ -190,6 +190,9 @@
 				case 'add-element':
 					this.addElement( data.payload );
 					break;
+				case 'update-text':
+					this.updateText( data.payload );
+					break;
 				default:
 					break;
 			}
@@ -369,6 +372,18 @@
 
 		positionGhost: function ( x, y ) {
 			if ( this.$.ghost ) { this.$.ghost.css( { left: ( x + 14 ) + 'px', top: ( y + 14 ) + 'px' } ); }
+		},
+
+		/** Inline text edit committed (double-click). Store the HTML in the model;
+		 *  the canvas already shows it, so no re-render is needed. */
+		updateText: function ( payload ) {
+			payload = payload || {};
+			var node = this.nodeOf( payload.id );
+			if ( ! node ) { return; }
+			if ( ! node.atts ) { node.atts = {}; }
+			if ( node.atts.text === payload.text ) { return; } // no change
+			node.atts.text = payload.text;
+			this.markDirty();
 		},
 
 		/* ---- styled confirm dialog ------------------------------------- */
