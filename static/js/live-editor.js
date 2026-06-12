@@ -886,8 +886,14 @@
 			var targetSiblings;
 			if ( payload.targetParentId ) {
 				if ( ! targetParent ) { this.log( 'move: unknown target parent', payload.targetParentId ); return; }
-				if ( ! targetParent.node._items ) { targetParent.node._items = []; }
-				targetSiblings = targetParent.node._items;
+				// A column dropped into a section lands in that section's column
+				// array (which also handles a section that wraps columns in a row).
+				if ( node.type === 'column' && /section$/.test( targetParent.node.type || '' ) ) {
+					targetSiblings = columnArrayOf( targetParent.node );
+				} else {
+					if ( ! targetParent.node._items ) { targetParent.node._items = []; }
+					targetSiblings = targetParent.node._items;
+				}
 			} else {
 				targetSiblings = this.model;
 			}

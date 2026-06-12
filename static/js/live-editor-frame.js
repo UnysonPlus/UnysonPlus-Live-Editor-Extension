@@ -443,6 +443,7 @@
 				id:             this.activeId,
 				container:      this.activeEl.parentNode,
 				isLeaf:         ! isContainerType( meta.type ),
+				isColumn:       meta.type === 'column',
 				parentId:       meta.parentId || null,
 				targetParentId: meta.parentId || null,
 				startX:         e.clientX,
@@ -460,15 +461,15 @@
 		beginDrag: function () {
 			var d = this.drag;
 			d.started = true;
-			if ( ! d.isLeaf ) {
-				// Containers (columns / sections) reorder among same-parent siblings.
+			if ( ! d.isLeaf && ! d.isColumn ) {
+				// Sections reorder among same-parent siblings (precomputed list).
 				d.siblings = Array.prototype.filter.call( d.container.children, function ( c ) {
 					return c.nodeType === 1 && c.hasAttribute( 'data-fw-item-id' );
 				} );
 				d.horizontal = this.detectHorizontal( d.siblings );
 			}
-			// Leaves are resolved against whichever column is under the pointer
-			// (cross-column moves), so they need no precomputed sibling list.
+			// Leaves (any column under the pointer) and columns (any section under
+			// the pointer) are resolved per-move, so they need no precomputed list.
 			d.el.classList.add( 'fw-le-dragging' );
 			this.els.activeBox.style.display = 'none';
 			this.els.hoverBox.style.display = 'none';
@@ -496,6 +497,8 @@
 			e.preventDefault();
 			if ( d.isLeaf ) {
 				this.computeLeafDrop( e.clientX, e.clientY );
+			} else if ( d.isColumn ) {
+				this.computeColumnDrop( e.clientX, e.clientY );
 			} else {
 				d.before = this.computeDropTarget( e.clientX, e.clientY );
 				this.positionDropline( d.before );
@@ -540,6 +543,87 @@
 				? before.getBoundingClientRect().top - 3
 				: ( leaves.length ? leaves[ leaves.length - 1 ].getBoundingClientRect().bottom + 1 : cr.top + 6 )
 			) + 'px';
+		},
+
+		/* Column drag: target any section under the pointer; insert among its
+		 * columns (so a column can move within OR across sections). */
+		computeColumnDrop: function ( x, y ) {
+			var d = this.drag;
+			var t = this.columnDropAt( x, y, d.el );
+			if ( ! t ) { d.targetSectionId = null; this.els.dropline.style.display = 'none'; return; }
+			d.targetSectionId = t.sectionEl.getAttribute( 'data-fw-item-id' );
+			d.targetRowEl     = t.rowEl;
+			d.before          = t.before;
+			this.showColumnDropline( t.rowEl, t.before, d.el );
+		},
+
+		/** Resolve { sectionEl, rowEl, before } for a point — the section under the
+		 *  pointer, the row to drop into, and the column to insert before (null =
+		 *  append). Returns null if not over a section. */
+		columnDropAt: function ( x, y, excludeEl ) {
+			var under = document.elementFromPoint( x, y );
+			if ( ! under ) { return null; }
+			var sectionEl = this.nearestSectionEl( under );
+			if ( ! sectionEl ) { return null; }
+
+			var colUnder = this.nearestColumnEl( under );
+			if ( colUnder && colUnder !== excludeEl ) {
+				var r = colUnder.getBoundingClientRect();
+				var before = ( x < r.left + r.width / 2 ) ? colUnder : this.nextColumnEl( colUnder, excludeEl );
+				return { sectionEl: sectionEl, rowEl: colUnder.parentNode, before: before };
+			}
+
+			// Over the section but not a column → append into its last row.
+			var rows = sectionEl.querySelectorAll( '.fw-row' );
+			var rowEl = rows.length ? rows[ rows.length - 1 ] : ( sectionEl.querySelector( '.fw-container' ) || sectionEl );
+			return { sectionEl: sectionEl, rowEl: rowEl, before: null };
+		},
+
+		/** Nearest section-like ancestor element of `el` (or null). */
+		nearestSectionEl: function ( el ) {
+			var node = el;
+			while ( node && node !== document.body ) {
+				if ( node.nodeType === 1 && node.hasAttribute && node.hasAttribute( 'data-fw-item-id' ) ) {
+					var meta = this.index[ node.getAttribute( 'data-fw-item-id' ) ];
+					if ( meta && /section$/.test( meta.type || '' ) ) { return node; }
+				}
+				node = node.parentNode;
+			}
+			return null;
+		},
+
+		/** Next column sibling after `colEl` (skipping the dragged element). */
+		nextColumnEl: function ( colEl, excludeEl ) {
+			var n = colEl.nextElementSibling;
+			while ( n ) {
+				if ( n !== excludeEl && n.hasAttribute( 'data-fw-item-id' ) &&
+					( this.index[ n.getAttribute( 'data-fw-item-id' ) ] || {} ).type === 'column' ) { return n; }
+				n = n.nextElementSibling;
+			}
+			return null;
+		},
+
+		showColumnDropline: function ( rowEl, before, excludeEl ) {
+			var line = this.els.dropline, rr = rowEl.getBoundingClientRect();
+			line.style.display = 'block';
+			line.className = 'fw-le-dropline--v';
+			line.style.width = '';
+			line.style.top = rr.top + 'px';
+			line.style.height = rr.height + 'px';
+
+			var x;
+			if ( before ) {
+				x = before.getBoundingClientRect().left - 2;
+			} else {
+				var last = null, c = rowEl.firstElementChild;
+				while ( c ) {
+					if ( c !== excludeEl && c.hasAttribute( 'data-fw-item-id' ) &&
+						( this.index[ c.getAttribute( 'data-fw-item-id' ) ] || {} ).type === 'column' ) { last = c; }
+					c = c.nextElementSibling;
+				}
+				x = last ? last.getBoundingClientRect().right + 1 : rr.left + 4;
+			}
+			line.style.left = x + 'px';
 		},
 
 		/* ---- drag-to-add from the element panel (native DnD) ----------- */
@@ -879,15 +963,38 @@
 				else { content = d.targetColEl; } // empty column
 				if ( d.before ) { content.insertBefore( d.el, d.before ); }
 				else { content.appendChild( d.el ); }
-			} else {
-				d.container.insertBefore( d.el, d.before || null );
+				this.markEmptyColumns();
+				this.select( d.el, d.id );
+				this.toShell( 'move-item', {
+					id: d.id, targetParentId: d.targetParentId,
+					beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
+				} );
+				return;
 			}
 
-			if ( d.isLeaf ) { this.markEmptyColumns(); }
-			this.select( d.el, d.id );
+			if ( d.isColumn ) {
+				if ( ! d.targetSectionId ) { this.select( d.el, d.id ); return; } // no section under pointer
+				// Move the column element into the target section's row (same section
+				// OR a different one).
+				if ( d.before && d.before.parentNode ) { d.before.parentNode.insertBefore( d.el, d.before ); }
+				else if ( d.targetRowEl ) { d.targetRowEl.appendChild( d.el ); }
+				this.markEmptyColumns();
+				this.ensureSectionAddColZones();
+				this.select( d.el, d.id );
+				this.toShell( 'move-item', {
+					id: d.id, targetParentId: d.targetSectionId,
+					beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
+				} );
+				return;
+			}
 
-			var beforeId = ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null;
-			this.toShell( 'move-item', { id: d.id, targetParentId: d.targetParentId, beforeId: beforeId } );
+			// Section (or row) reorder among same-parent siblings.
+			d.container.insertBefore( d.el, d.before || null );
+			this.select( d.el, d.id );
+			this.toShell( 'move-item', {
+				id: d.id, targetParentId: d.targetParentId,
+				beforeId: ( d.before && d.before.getAttribute ) ? d.before.getAttribute( 'data-fw-item-id' ) : null
+			} );
 		},
 
 		/** Swap a re-rendered item's HTML into the canvas, keeping it selected. */
