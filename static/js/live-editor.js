@@ -110,6 +110,7 @@
 			this.$.exit.on( 'click', this.onExit.bind( this ) );
 			this.$.save.on( 'click', this.onSave.bind( this ) );
 			this.buildIndex( this.model, null );
+			this.buildPanel();
 
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 
@@ -147,7 +148,7 @@
 		toFrame: function ( type, payload ) {
 			var win = this.$.frame.length && this.$.frame[ 0 ].contentWindow;
 			if ( win ) {
-				this.log( 'send → frame', type );
+				if ( type !== 'add-dragover' ) { this.log( 'send → frame', type ); } // high-frequency: skip
 				win.postMessage( { ns: NS, type: type, payload: payload }, '*' );
 			} else {
 				this.log( 'no iframe window to message' );
@@ -186,9 +187,188 @@
 				case 'move-item':
 					this.moveItem( data.payload );
 					break;
+				case 'add-element':
+					this.addElement( data.payload );
+					break;
 				default:
 					break;
 			}
+		},
+
+		/* ---- add-element panel (Phase C) ------------------------------- */
+
+		buildPanel: function () {
+			var self = this;
+			var elements = cfg.elements || [];
+
+			// "Add" toggle in the toolbar.
+			this.$.addBtn = $(
+				'<button type="button" id="fw-le-add" class="fw-le-btn fw-le-btn--ghost">' +
+					'<span class="dashicons dashicons-plus-alt2"></span> ' + ( ( cfg.l10n && cfg.l10n.add ) || 'Add' ) +
+				'</button>'
+			).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
+			this.$.addBtn.on( 'click', function () { $( 'body' ).toggleClass( 'fw-le-panel-open' ); } );
+
+			var $panel = $(
+				'<aside id="fw-le-panel">' +
+					'<div class="fw-le-panel__head"><strong>' + ( ( cfg.l10n && cfg.l10n.addElement ) || 'Add Element' ) + '</strong>' +
+						'<button type="button" class="fw-le-panel__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-panel__search"><input type="search" placeholder="' + ( ( cfg.l10n && cfg.l10n.search ) || 'Search…' ) + '"></div>' +
+					'<div class="fw-le-panel__body"></div>' +
+				'</aside>'
+			);
+			var $body = $panel.find( '.fw-le-panel__body' );
+
+			// Group by tab.
+			var groups = {}, order = [];
+			elements.forEach( function ( el ) {
+				var tab = el.tab || 'Elements';
+				if ( ! groups[ tab ] ) { groups[ tab ] = []; order.push( tab ); }
+				groups[ tab ].push( el );
+			} );
+
+			order.forEach( function ( tab ) {
+				var $grp = $( '<div class="fw-le-panel__group"><div class="fw-le-panel__grouptitle"></div><div class="fw-le-panel__tiles"></div></div>' );
+				$grp.find( '.fw-le-panel__grouptitle' ).text( tab );
+				var $tiles = $grp.find( '.fw-le-panel__tiles' );
+				groups[ tab ].forEach( function ( el ) {
+					var $tile = $( '<div class="fw-le-tile"><span class="fw-le-tile__icon"></span><span class="fw-le-tile__title"></span></div>' );
+					$tile.attr( 'data-tag', el.tag ).attr( 'data-search', ( el.title + ' ' + el.tag ).toLowerCase() );
+					$tile.find( '.fw-le-tile__title' ).text( el.title );
+					if ( el.icon ) {
+						if ( el.icon.charAt( 0 ) === '<' ) { $tile.find( '.fw-le-tile__icon' ).html( el.icon ); }
+						else { $tile.find( '.fw-le-tile__icon' ).html( '<img src="' + el.icon + '" alt="">' ); }
+					}
+					// Pointer-capture drag (native DnD can't cross the iframe boundary).
+					( function ( info ) {
+						$tile[ 0 ].addEventListener( 'pointerdown', function ( e ) {
+							if ( e.button !== 0 ) { return; }
+							self.startPanelDrag( info, e );
+						} );
+					} )( { tag: el.tag, title: el.title } );
+					$tiles.append( $tile );
+				} );
+				$body.append( $grp );
+			} );
+
+			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-panel-open' ); } );
+			$panel.find( '.fw-le-panel__search input' ).on( 'input', function () {
+				var q = this.value.toLowerCase();
+				$panel.find( '.fw-le-tile' ).each( function () {
+					this.style.display = ( this.getAttribute( 'data-search' ).indexOf( q ) !== -1 ) ? '' : 'none';
+				} );
+			} );
+
+			$( '#fw-live-editor-app' ).append( $panel );
+		},
+
+		addElement: function ( payload ) {
+			payload = payload || {};
+			if ( ! payload.tag || ! payload.targetParentId ) { return; }
+
+			var self = this;
+			this.ajax( cfg.actions.newItem, { tag: payload.tag }, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new element failed', resp );
+					return;
+				}
+				var item = resp.data.item;
+				var id   = ( item.atts && item.atts.unique_id ) || item.unique_id;
+
+				var targetParent = self.index[ payload.targetParentId ];
+				if ( ! targetParent ) { return; }
+				var node = targetParent.node;
+				if ( ! node._items ) { node._items = []; }
+
+				var insertAt = node._items.length;
+				if ( payload.beforeId && self.index[ payload.beforeId ] && self.index[ payload.beforeId ].siblings === node._items ) {
+					var bi = node._items.indexOf( self.index[ payload.beforeId ].node );
+					if ( bi >= 0 ) { insertAt = bi; }
+				}
+				node._items.splice( insertAt, 0, item );
+
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+				self.toFrame( 'insert-element', {
+					html:           resp.data.html,
+					targetParentId: payload.targetParentId,
+					beforeId:       payload.beforeId,
+					id:             id
+				} );
+			} );
+		},
+
+		/* ---- pointer-capture drag from the panel ----------------------- */
+
+		startPanelDrag: function ( info, e ) {
+			e.preventDefault();
+			var self = this;
+			var captureEl = e.target.closest ? ( e.target.closest( '.fw-le-tile' ) || e.target ) : e.target;
+
+			this.panelDrag = {
+				tag: info.tag, title: info.title, pointerId: e.pointerId,
+				el: captureEl, startX: e.clientX, startY: e.clientY,
+				started: false, overFrame: false
+			};
+			try { captureEl.setPointerCapture( e.pointerId ); } catch ( err ) {}
+
+			this.panelDrag.move = function ( ev ) { self.onPanelMove( ev ); };
+			this.panelDrag.up   = function ( ev ) { self.onPanelUp( ev ); };
+			captureEl.addEventListener( 'pointermove', this.panelDrag.move, true );
+			captureEl.addEventListener( 'pointerup', this.panelDrag.up, true );
+			captureEl.addEventListener( 'pointercancel', this.panelDrag.up, true );
+			this.log( 'panel drag start', info.tag );
+		},
+
+		onPanelMove: function ( e ) {
+			var pd = this.panelDrag;
+			if ( ! pd ) { return; }
+			if ( ! pd.started ) {
+				if ( Math.abs( e.clientX - pd.startX ) + Math.abs( e.clientY - pd.startY ) < 4 ) { return; }
+				pd.started = true;
+				this.$.ghost = $( '<div class="fw-le-drag-ghost" />' ).text( pd.title ).appendTo( 'body' );
+				$( 'body' ).addClass( 'fw-le-adding' );
+				this.log( 'panel drag began' );
+			}
+			this.positionGhost( e.clientX, e.clientY );
+
+			var r = this.$.frame[ 0 ].getBoundingClientRect();
+			var inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+			if ( inside ) {
+				pd.overFrame = true;
+				this.toFrame( 'add-dragover', { x: e.clientX - r.left, y: e.clientY - r.top, tag: pd.tag } );
+			} else if ( pd.overFrame ) {
+				pd.overFrame = false;
+				this.toFrame( 'add-dragend', {} );
+			}
+		},
+
+		onPanelUp: function ( e ) {
+			var pd = this.panelDrag;
+			if ( ! pd ) { return; }
+			var el = pd.el;
+			el.removeEventListener( 'pointermove', pd.move, true );
+			el.removeEventListener( 'pointerup', pd.up, true );
+			el.removeEventListener( 'pointercancel', pd.up, true );
+			try { el.releasePointerCapture( pd.pointerId ); } catch ( err ) {}
+
+			if ( this.$.ghost ) { this.$.ghost.remove(); this.$.ghost = null; }
+			$( 'body' ).removeClass( 'fw-le-adding' );
+			this.panelDrag = null;
+
+			var r = this.$.frame[ 0 ].getBoundingClientRect();
+			var inside = pd.started && e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+			this.log( 'panel drag end', { inside: inside, overFrame: pd.overFrame } );
+			if ( inside ) {
+				this.toFrame( 'add-drop', { x: e.clientX - r.left, y: e.clientY - r.top, tag: pd.tag } );
+			} else {
+				this.toFrame( 'add-dragend', {} );
+			}
+		},
+
+		positionGhost: function ( x, y ) {
+			if ( this.$.ghost ) { this.$.ghost.css( { left: ( x + 14 ) + 'px', top: ( y + 14 ) + 'px' } ); }
 		},
 
 		/* ---- styled confirm dialog ------------------------------------- */

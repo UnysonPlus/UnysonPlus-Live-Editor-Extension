@@ -46,6 +46,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// --- AJAX (admin-ajax.php runs in is_admin() context). ---
 		add_action( 'wp_ajax_fw_live_editor_item_options', array( $this, '_ajax_item_options' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_item', array( $this, '_ajax_render_item' ) );
+		add_action( 'wp_ajax_fw_live_editor_new_item', array( $this, '_ajax_new_item' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 
 		// --- Edit-mode render filters. ---
@@ -364,8 +365,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'actions'  => array(
 				'itemOptions' => 'fw_live_editor_item_options',
 				'renderItem'  => 'fw_live_editor_render_item',
+				'newItem'     => 'fw_live_editor_new_item',
 				'save'        => 'fw_live_editor_save',
 			),
+			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
+			'elements' => $this->get_insertable_elements(),
 			// Server-side diagnostic: did WordPress actually enqueue the options
 			// runtime on this shell? If these are false, the core
 			// `fw:backend:enqueue-options-on-frontend` filter isn't taking effect
@@ -392,6 +396,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'saved'       => __( 'Saved', 'fw' ),
 				'saveError'   => __( 'Save failed', 'fw' ),
 				'confirmExit' => __( 'You have unsaved changes. Leave anyway?', 'fw' ),
+				'add'         => __( 'Add', 'fw' ),
+				'addElement'  => __( 'Add Element', 'fw' ),
+				'search'      => __( 'Search…', 'fw' ),
 			),
 		) );
 	}
@@ -488,6 +495,31 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		if ( $sc && method_exists( $sc, 'load_shortcodes' ) ) {
 			$sc->load_shortcodes();
 		}
+	}
+
+	/**
+	 * The leaf elements a user can drag onto the canvas, grouped data for the
+	 * "Add" panel. Built from the shortcodes builder data (the same registry the
+	 * classic builder's element list uses). Shortcodes are already loaded by
+	 * enqueue_options_runtime() before this runs.
+	 *
+	 * @return array[] each { tag, title, tab, icon }
+	 */
+	private function get_insertable_elements() {
+		$out = array();
+		$sc  = fw_ext( 'shortcodes' );
+		if ( ! $sc || ! method_exists( $sc, 'get_builder_data' ) ) {
+			return $out;
+		}
+		foreach ( (array) $sc->get_builder_data() as $tag => $row ) {
+			$out[] = array(
+				'tag'   => $tag,
+				'title' => isset( $row['title'] ) && $row['title'] !== '' ? $row['title'] : $tag,
+				'tab'   => isset( $row['tab'] ) && $row['tab'] !== '~' ? $row['tab'] : __( 'Elements', 'fw' ),
+				'icon'  => isset( $row['icon'] ) ? $row['icon'] : '',
+			);
+		}
+		return $out;
 	}
 
 	/**
@@ -650,6 +682,25 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			wp_send_json_error( array( 'message' => __( 'Invalid item.', 'fw' ) ) );
 		}
 
+		$html = $this->render_item_html( $item, $post_id );
+
+		wp_send_json_success( array(
+			'id'   => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
+			'html' => $html,
+		) );
+	}
+
+	/**
+	 * Render ONE builder item subtree to its front-end HTML, with auto-correction
+	 * disabled (so exactly that item is produced) and the edit-render stamping on.
+	 * Shared by the re-render and new-item endpoints.
+	 *
+	 * @param array $item
+	 * @param int   $post_id
+	 *
+	 * @return string
+	 */
+	private function render_item_html( $item, $post_id ) {
 		$this->load_shortcodes();
 
 		// Some shortcodes read the global $post; set it up for the render.
@@ -671,9 +722,86 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		$this->force_edit_render = false;
 		wp_reset_postdata();
 
+		// Some elements render to nothing when empty (e.g. a text block with no
+		// text), which would make a freshly-added item invisible/unselectable in
+		// the canvas. In edit mode, fall back to a placeholder card that carries
+		// the item id so it can still be selected and edited.
+		if ( trim( $html ) === '' ) {
+			$uid   = isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '';
+			$label = $this->element_label( isset( $item['shortcode'] ) ? $item['shortcode'] : $item['type'] );
+			$html  = '<div class="fw-le-empty-item" data-fw-item-id="' . esc_attr( $uid ) . '">'
+			       . esc_html( sprintf( __( 'Empty %s — select it and click the edit (✎) button', 'fw' ), $label ) )
+			       . '</div>';
+		}
+
+		return $html;
+	}
+
+	/**
+	 * A human label for an element tag (its builder title, else a titleized tag).
+	 *
+	 * @param string $tag
+	 *
+	 * @return string
+	 */
+	private function element_label( $tag ) {
+		$sc = fw_ext( 'shortcodes' );
+		if ( $sc && method_exists( $sc, 'get_shortcode_builder_data' ) ) {
+			$row = $sc->get_shortcode_builder_data( $tag );
+			if ( is_array( $row ) && ! empty( $row['title'] ) ) {
+				return $row['title'];
+			}
+		}
+		return ucwords( str_replace( array( '_', '-' ), ' ', (string) $tag ) );
+	}
+
+	/**
+	 * Create a NEW default item of a given element type and return it + its
+	 * rendered HTML. POST: post_id, nonce, tag. Used by the "Add" panel drop.
+	 *
+	 * @internal
+	 */
+	public function _ajax_new_item() {
+		$post_id = $this->verify_ajax();
+
+		$tag = (string) FW_Request::POST( 'tag' );
+
+		$this->load_shortcodes();
+
+		$sc        = fw_ext( 'shortcodes' );
+		$shortcode = $sc ? $sc->get_shortcode( $tag ) : null;
+
+		if ( ! $shortcode ) {
+			wp_send_json_error( array( 'message' => sprintf( __( 'Unknown element: %s', 'fw' ), $tag ) ) );
+		}
+
+		// Default atts: prefer the builder data's precomputed default_values; else
+		// derive them from the shortcode's options.
+		$atts = array();
+		$row  = method_exists( $sc, 'get_shortcode_builder_data' ) ? $sc->get_shortcode_builder_data( $tag ) : null;
+		if ( is_array( $row ) && isset( $row['default_values'] ) && is_array( $row['default_values'] ) ) {
+			$atts = $row['default_values'];
+		} else {
+			$atts = fw_get_options_values_from_input( fw_extract_only_options( $shortcode->get_options() ), array() );
+		}
+		$atts['unique_id'] = fw_rand_md5();
+
+		// Give a new text block visible starter content (it renders nothing when
+		// empty), so it's immediately visible and editable on the canvas.
+		if ( $tag === 'text_block' && empty( $atts['text'] ) ) {
+			$atts['text'] = '<p>' . __( 'Your text here…', 'fw' ) . '</p>';
+		}
+
+		$item = array(
+			'type'      => 'simple',
+			'shortcode' => $tag,
+			'atts'      => $atts,
+			'_items'    => array(),
+		);
+
 		wp_send_json_success( array(
-			'id'   => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
-			'html' => $html,
+			'item' => $item,
+			'html' => $this->render_item_html( $item, $post_id ),
 		) );
 	}
 

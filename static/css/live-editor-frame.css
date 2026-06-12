@@ -15,6 +15,19 @@ body.fw-live-editor-frame-active {
 	cursor: default;
 }
 
+/* Placeholder for a freshly-added element that renders empty (edit mode only). */
+body.fw-live-editor-frame-active .fw-le-empty-item {
+	padding: 18px;
+	margin: 6px 0;
+	border: 1px dashed #b3b8c4;
+	border-radius: 6px;
+	color: #8a8f9c;
+	font-style: italic;
+	font-size: 13px;
+	text-align: center;
+	background: rgba( 79, 140, 255, .04 );
+}
+
 /* Faint guide on every selectable item so the structure is visible at a glance. */
 body.fw-live-editor-frame-active [data-fw-item-id] {
 	outline: 1px dashed rgba( 79, 140, 255, .18 );

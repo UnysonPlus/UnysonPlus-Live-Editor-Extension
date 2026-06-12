@@ -117,7 +117,7 @@
 				return;
 			}
 
-			this.log( 'recv', data.type, 'origin:', ev.origin );
+			if ( data.type !== 'add-dragover' ) { this.log( 'recv', data.type, 'origin:', ev.origin ); } // high-frequency: skip
 
 			if ( data.type === 'init' ) {
 				if ( this.announceTimer ) {
@@ -143,9 +143,41 @@
 				this.buildIndex( this.model, null );
 			} else if ( data.type === 'insert-after' ) {
 				this.insertAfter( data.payload );
+			} else if ( data.type === 'insert-element' ) {
+				this.insertElement( data.payload );
+			} else if ( data.type === 'add-dragover' ) {
+				this.pointerAddOver( data.payload );
+			} else if ( data.type === 'add-drop' ) {
+				this.pointerAddDrop( data.payload );
+			} else if ( data.type === 'add-dragend' ) {
+				this.addDropTarget = null;
+				this.els.dropline.style.display = 'none';
 			} else if ( data.type === 'remove' ) {
 				this.removeItem( data.payload );
 			}
+		},
+
+		/* Pointer-relayed drag-to-add (coords are iframe-viewport relative). */
+		pointerAddOver: function ( p ) {
+			if ( ! p ) { return; }
+			var t = this.leafDropAt( p.x, p.y, null );
+			this.addDropTarget = t;
+			if ( t ) { this.showLeafDropline( t.col, t.before, t.leaves ); }
+			else { this.els.dropline.style.display = 'none'; }
+		},
+
+		pointerAddDrop: function ( p ) {
+			if ( ! p ) { return; }
+			var t = this.leafDropAt( p.x, p.y, null );
+			this.els.dropline.style.display = 'none';
+			this.addDropTarget = null;
+			this.log( 'add-drop', { tag: p.tag, col: t && t.col && t.col.getAttribute( 'data-fw-item-id' ) } );
+			if ( ! t || ! t.col ) { return; }
+			this.toShell( 'add-element', {
+				tag:            p.tag,
+				targetParentId: t.col.getAttribute( 'data-fw-item-id' ),
+				beforeId:       t.before ? t.before.getAttribute( 'data-fw-item-id' ) : null
+			} );
 		},
 
 		/** Insert a duplicated item's HTML right after its source, then select it. */
@@ -256,21 +288,31 @@
 		/* Leaf drag: target any column under the pointer; insert among its leaves. */
 		computeLeafDrop: function ( x, y ) {
 			var d = this.drag;
+			var t = this.leafDropAt( x, y, d.el );
+			if ( ! t ) { d.targetParentId = null; this.els.dropline.style.display = 'none'; return; }
+			d.targetParentId = t.col.getAttribute( 'data-fw-item-id' );
+			d.targetColEl    = t.col;
+			d.leaves         = t.leaves;
+			d.before         = t.before;
+			this.showLeafDropline( t.col, t.before, t.leaves );
+		},
+
+		/** Resolve { col, before, leaves } for a point — shared by pointer-drag
+		 *  reordering and native drag-to-add. Returns null if not over a column. */
+		leafDropAt: function ( x, y, excludeEl ) {
 			var under = document.elementFromPoint( x, y );
 			var col = under ? this.nearestColumnEl( under ) : null;
-			if ( ! col ) { d.targetParentId = null; this.els.dropline.style.display = 'none'; return; }
-
-			var leaves = this.leafChildrenOf( col, d.el );
+			if ( ! col ) { return null; }
+			var leaves = this.leafChildrenOf( col, excludeEl || null );
 			var before = null;
 			for ( var i = 0; i < leaves.length; i++ ) {
 				var r = leaves[ i ].getBoundingClientRect();
 				if ( y < r.top + r.height / 2 ) { before = leaves[ i ]; break; }
 			}
-			d.targetParentId = col.getAttribute( 'data-fw-item-id' );
-			d.targetColEl = col;
-			d.leaves = leaves;
-			d.before = before;
+			return { col: col, before: before, leaves: leaves };
+		},
 
+		showLeafDropline: function ( col, before, leaves ) {
 			var line = this.els.dropline, cr = col.getBoundingClientRect();
 			line.style.display = 'block';
 			line.className = 'fw-le-dropline--h';
@@ -281,6 +323,70 @@
 				? before.getBoundingClientRect().top - 3
 				: ( leaves.length ? leaves[ leaves.length - 1 ].getBoundingClientRect().bottom + 1 : cr.top + 6 )
 			) + 'px';
+		},
+
+		/* ---- drag-to-add from the element panel (native DnD) ----------- */
+
+		isElementDrag: function ( e ) {
+			return !! ( e.dataTransfer &&
+				Array.prototype.indexOf.call( e.dataTransfer.types || [], 'application/x-fw-element' ) !== -1 );
+		},
+
+		onAddDragEnter: function ( e ) {
+			if ( ! this.isElementDrag( e ) ) { return; }
+			e.preventDefault();
+			if ( e.dataTransfer ) { e.dataTransfer.dropEffect = 'copy'; }
+		},
+
+		onAddDragOver: function ( e ) {
+			if ( ! this.isElementDrag( e ) ) { return; }
+			e.preventDefault();
+			if ( e.dataTransfer ) { e.dataTransfer.dropEffect = 'copy'; }
+			var t = this.leafDropAt( e.clientX, e.clientY, null );
+			this.addDropTarget = t;
+			if ( t ) { this.showLeafDropline( t.col, t.before, t.leaves ); }
+			else { this.els.dropline.style.display = 'none'; }
+		},
+
+		onAddDrop: function ( e ) {
+			if ( ! this.isElementDrag( e ) ) { return; }
+			e.preventDefault();
+			var tag = e.dataTransfer.getData( 'application/x-fw-element' ) || e.dataTransfer.getData( 'text/plain' );
+			this.els.dropline.style.display = 'none';
+			var t = this.addDropTarget;
+			this.addDropTarget = null;
+			if ( ! tag || ! t || ! t.col ) { return; }
+			this.toShell( 'add-element', {
+				tag:            tag,
+				targetParentId: t.col.getAttribute( 'data-fw-item-id' ),
+				beforeId:       t.before ? t.before.getAttribute( 'data-fw-item-id' ) : null
+			} );
+		},
+
+		onAddDragLeave: function ( e ) {
+			if ( e.relatedTarget === null ) { this.els.dropline.style.display = 'none'; }
+		},
+
+		/** Insert a newly-created element's HTML into the target column + select it. */
+		insertElement: function ( payload ) {
+			if ( ! payload || ! payload.targetParentId ) { return; }
+			var col = document.querySelector( '[data-fw-item-id="' + payload.targetParentId + '"]' );
+			if ( ! col ) { this.log( 'insert-element: target column not found' ); return; }
+
+			var tmp = document.createElement( 'div' );
+			tmp.innerHTML = String( payload.html || '' ).trim();
+			var nu = tmp.firstElementChild;
+			if ( ! nu ) { return; }
+
+			var beforeEl = payload.beforeId ? document.querySelector( '[data-fw-item-id="' + payload.beforeId + '"]' ) : null;
+			if ( beforeEl && beforeEl.parentNode ) {
+				beforeEl.parentNode.insertBefore( nu, beforeEl );
+			} else {
+				var leaves = this.leafChildrenOf( col, null );
+				var content = leaves.length ? leaves[ leaves.length - 1 ].parentNode : col;
+				content.appendChild( nu );
+			}
+			this.select( nu, payload.id );
 		},
 
 		nearestColumnEl: function ( el ) {
@@ -523,6 +629,14 @@
 			};
 			window.addEventListener( 'scroll', reflow, true );
 			window.addEventListener( 'resize', reflow, false );
+
+			// Native drag-and-drop from the shell's element panel into the canvas.
+			// dragenter AND dragover must preventDefault to register a drop target
+			// (cross-iframe drags are strict about this).
+			document.addEventListener( 'dragenter', function ( e ) { self.onAddDragEnter( e ); }, false );
+			document.addEventListener( 'dragover', function ( e ) { self.onAddDragOver( e ); }, false );
+			document.addEventListener( 'drop', function ( e ) { self.onAddDrop( e ); }, false );
+			document.addEventListener( 'dragleave', function ( e ) { self.onAddDragLeave( e ); }, false );
 		},
 
 		selectableFrom: function ( el ) {
