@@ -203,6 +203,8 @@
 				this.insertSection( data.payload );
 			} else if ( data.type === 'render-page' ) {
 				this.renderPage( data.payload );
+			} else if ( data.type === 'reflow' ) {
+				this.reposition();
 			} else if ( data.type === 'add-dragover' ) {
 				this.pointerAddOver( data.payload );
 			} else if ( data.type === 'add-drop' ) {

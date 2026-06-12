@@ -169,6 +169,11 @@
 			this.$.save.on( 'click', this.onSave.bind( this ) );
 			this.$.undo.on( 'click', this.undo.bind( this ) );
 			this.$.redo.on( 'click', this.redo.bind( this ) );
+
+			var self = this;
+			$( '#fw-le-devices' ).on( 'click', '.fw-le-device', function () {
+				self.setDevice( this.getAttribute( 'data-device' ) );
+			} );
 			this.buildIndex( this.model, null );
 			this.buildPanel();
 			this.refreshUndoRedo();
@@ -1143,6 +1148,24 @@
 
 		setStatus: function ( state, text ) {
 			this.$.status.attr( 'data-state', state ).text( text );
+		},
+
+		/** Switch the canvas to a device-preview width. The iframe's own viewport
+		 *  width drives the page's media queries, so narrowing it shows the real
+		 *  responsive layout. `desktop` fills the canvas; tablet/mobile center a
+		 *  fixed-width frame. After resizing, the canvas selection overlay is stale,
+		 *  so ask the frame to reposition it. */
+		setDevice: function ( device ) {
+			device = ( device === 'tablet' || device === 'mobile' ) ? device : 'desktop';
+			$( 'body' )
+				.removeClass( 'fw-le-device-desktop fw-le-device-tablet fw-le-device-mobile' )
+				.addClass( 'fw-le-device-' + device );
+			$( '#fw-le-devices .fw-le-device' ).each( function () {
+				this.classList.toggle( 'is-active', this.getAttribute( 'data-device' ) === device );
+			} );
+			// The iframe transition settles after ~250ms; nudge the overlay then.
+			var self = this;
+			window.setTimeout( function () { self.toFrame( 'reflow', {} ); }, 280 );
 		}
 	};
 

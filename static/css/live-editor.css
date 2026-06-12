@@ -177,6 +177,44 @@ body.fw-live-editor-shell {
 	height: 18px;
 }
 
+/* ---- Device preview toggle ------------------------------------------------ */
+
+.fw-le-devices {
+	display: inline-flex;
+	gap: 2px;
+	padding: 2px;
+	background: #1b1d24;
+	border: 1px solid #3a3c46;
+	border-radius: 8px;
+}
+
+.fw-le-device {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 34px;
+	height: 28px;
+	border: 0;
+	border-radius: 6px;
+	background: transparent;
+	color: #9aa0ad;
+	cursor: pointer;
+	transition: background .12s ease, color .12s ease;
+}
+
+.fw-le-device:hover { color: #fff; }
+
+.fw-le-device.is-active {
+	background: #4f8cff;
+	color: #fff;
+}
+
+.fw-le-device .dashicons {
+	font-size: 17px;
+	width: 17px;
+	height: 17px;
+}
+
 /* ---- Canvas / iframe ------------------------------------------------------ */
 
 .fw-le-canvas {
@@ -192,7 +230,30 @@ body.fw-live-editor-shell {
 	height: 100%;
 	border: 0;
 	background: #fff;
+	transition: width .25s ease;
 }
+
+/* Tablet / mobile: center a fixed-width device frame in the canvas. The iframe's
+ * own viewport width drives the page's media queries, so this previews the real
+ * responsive layout. */
+body.fw-le-device-tablet .fw-le-canvas,
+body.fw-le-device-mobile .fw-le-canvas {
+	display: flex;
+	justify-content: center;
+	align-items: stretch;
+	padding: 18px 0;
+}
+
+body.fw-le-device-tablet .fw-le-frame,
+body.fw-le-device-mobile .fw-le-frame {
+	flex: 0 0 auto;
+	height: auto;
+	border-radius: 14px;
+	box-shadow: 0 12px 40px rgba( 0, 0, 0, .45 );
+}
+
+body.fw-le-device-tablet .fw-le-frame { width: 768px; }
+body.fw-le-device-mobile .fw-le-frame { width: 375px; }
 
 /* ---- Confirm dialog ------------------------------------------------------- */
 

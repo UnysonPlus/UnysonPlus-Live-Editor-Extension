@@ -58,10 +58,21 @@ $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_p
 				<span id="fw-le-status" class="fw-le-status" data-state="connecting">
 					<?php echo esc_html__( 'Connecting…', 'fw' ); ?>
 				</span>
+				<span class="fw-le-doc-title"><?php echo esc_html( get_the_title( $fw_le_post ) ); ?></span>
 			</div>
 
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--center">
-				<span class="fw-le-doc-title"><?php echo esc_html( get_the_title( $fw_le_post ) ); ?></span>
+				<div id="fw-le-devices" class="fw-le-devices" role="group" aria-label="<?php echo esc_attr__( 'Preview device', 'fw' ); ?>">
+					<button type="button" class="fw-le-device is-active" data-device="desktop" title="<?php echo esc_attr__( 'Desktop', 'fw' ); ?>">
+						<span class="dashicons dashicons-desktop"></span>
+					</button>
+					<button type="button" class="fw-le-device" data-device="tablet" title="<?php echo esc_attr__( 'Tablet', 'fw' ); ?>">
+						<span class="dashicons dashicons-tablet"></span>
+					</button>
+					<button type="button" class="fw-le-device" data-device="mobile" title="<?php echo esc_attr__( 'Mobile', 'fw' ); ?>">
+						<span class="dashicons dashicons-smartphone"></span>
+					</button>
+				</div>
 			</div>
 
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--right">
