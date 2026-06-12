@@ -281,8 +281,13 @@
 			var hit = this.selectableFrom( e.target );
 			if ( ! hit ) { return; }
 			var meta = this.index[ hit.id ];
-			if ( ! meta || meta.shortcode !== 'text_block' ) { return; } // text blocks only (for now)
-			this.enterInlineEdit( hit.el, hit.id );
+			if ( ! meta ) { return; }
+
+			if ( meta.shortcode === 'text_block' ) {
+				this.enterInlineEdit( hit.el, hit.id ); // inline contenteditable
+			} else if ( meta.shortcode === 'media_image' ) {
+				this.toShell( 'edit-image', { id: hit.id } ); // open the media picker
+			}
 		},
 
 		enterInlineEdit: function ( el, id ) {

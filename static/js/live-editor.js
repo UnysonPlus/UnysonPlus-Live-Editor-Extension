@@ -255,6 +255,9 @@
 				case 'update-text':
 					this.updateText( data.payload );
 					break;
+				case 'edit-image':
+					this.openImagePicker( data.payload && data.payload.id );
+					break;
 				case 'resize-column':
 					this.resizeColumn( data.payload );
 					break;
@@ -661,6 +664,55 @@
 
 		positionGhost: function ( x, y ) {
 			if ( this.$.ghost ) { this.$.ghost.css( { left: ( x + 14 ) + 'px', top: ( y + 14 ) + 'px' } ); }
+		},
+
+		/** Double-click an image → open the WP media library, swap the picked image
+		 *  into the element's `image` upload value, and re-render it. Mirrors the
+		 *  inline text-edit flow for direct, in-place image editing. */
+		openImagePicker: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			if ( typeof wp === 'undefined' || ! wp.media ) {
+				window.alert( 'The media library could not load. Please check the browser console.' );
+				return;
+			}
+
+			var self    = this;
+			var current = node.atts && node.atts.image;
+
+			var frame = wp.media( {
+				title:    ( cfg.l10n && cfg.l10n.selectImage ) || 'Select Image',
+				button:   { text: ( cfg.l10n && cfg.l10n.useImage ) || 'Use this image' },
+				library:  { type: 'image' },
+				multiple: false
+			} );
+
+			// Preselect the current image in the library.
+			frame.on( 'open', function () {
+				if ( ! ( current && current.attachment_id ) ) { return; }
+				var selection = frame.state().get( 'selection' );
+				var attachment = wp.media.attachment( current.attachment_id );
+				attachment.fetch();
+				selection.add( attachment ? [ attachment ] : [] );
+			} );
+
+			frame.on( 'select', function () {
+				var att = frame.state().get( 'selection' ).first();
+				att = att ? att.toJSON() : null;
+				if ( ! att || ! att.id ) { return; }
+
+				self.recordHistory();
+				if ( ! node.atts ) { node.atts = {}; }
+				node.atts.image = {
+					attachment_id: att.id,
+					// Store protocol-relative, matching the upload option type.
+					url: ( att.url || '' ).replace( /^https?:\/\//i, '//' )
+				};
+				self.markDirty();
+				self.renderItem( id );
+			} );
+
+			frame.open();
 		},
 
 		/** Inline text edit committed (double-click). Store the HTML in the model;

@@ -421,6 +421,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'addColumn'   => __( 'Add Column', 'fw' ),
 				'firstSection' => __( 'Add your first section', 'fw' ),
 				'addSectionHere' => __( 'Add Section', 'fw' ),
+				'selectImage'  => __( 'Select Image', 'fw' ),
+				'useImage'     => __( 'Use this image', 'fw' ),
 			),
 		) );
 	}
@@ -485,6 +487,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// which never happens on a normal front end. Enqueue it so Visual mode works.
 		if ( function_exists( 'wp_enqueue_editor' ) ) {
 			wp_enqueue_editor();
+		}
+
+		// The WordPress media library (wp.media) powers the direct image-swap
+		// (double-click an image) and any `upload` option field. Ensure it's
+		// always present, not just when an option type happens to enqueue it.
+		if ( function_exists( 'wp_enqueue_media' ) ) {
+			wp_enqueue_media();
 		}
 	}
 
