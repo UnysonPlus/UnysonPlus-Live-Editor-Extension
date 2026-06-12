@@ -68,6 +68,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		//    is resolved client-side from the model, so the HTML only needs the id —
 		//    no extra DOM, so the column grid / section layout is intact.
 		add_filter( 'sc_build_wrapper_attr', array( $this, '_filter_stamp_item_id' ), 999, 2 );
+		// 3. Front-end visibility: an item flagged `_fw_hidden` (set by the Live
+		//    Editor's Hide/Show eye) is wrapped in a display:none container so it
+		//    vanishes on the published page. NOT applied in edit-render — there the
+		//    item stays visible (the canvas dims it) so it remains selectable and
+		//    can be un-hidden. The `_fw_hidden` att round-trips through the JSON
+		//    attr coder, so it survives save → shortcode regeneration → render.
+		add_filter( 'fw_shortcode_render_view', array( $this, '_filter_hide_on_front' ), 999, 2 );
 
 		if ( ! is_admin() ) {
 			add_filter( 'template_include', array( $this, '_filter_template_include' ), 999 );
@@ -115,6 +122,29 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		return $attr;
+	}
+
+	/**
+	 * Hide an item flagged `_fw_hidden` on the front end by wrapping its output in
+	 * a display:none container. Skipped in edit-render so the Live Editor canvas
+	 * keeps the item visible (dimmed) and selectable.
+	 *
+	 * @param array $view_extra { before, after } wrapping strings
+	 * @param array $atts       decoded shortcode attributes
+	 *
+	 * @return array
+	 * @internal
+	 */
+	public function _filter_hide_on_front( $view_extra, $atts ) {
+		if ( empty( $atts['_fw_hidden'] ) || $this->is_edit_render() ) {
+			return $view_extra;
+		}
+
+		$view_extra['before'] = '<div class="fw-pb-hidden-item" aria-hidden="true" style="display:none !important">'
+			. ( isset( $view_extra['before'] ) ? $view_extra['before'] : '' );
+		$view_extra['after']  = ( isset( $view_extra['after'] ) ? $view_extra['after'] : '' ) . '</div>';
+
+		return $view_extra;
 	}
 
 	/**
@@ -323,10 +353,23 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	}
 
 	/**
+	 * Cache-busting asset version: the manifest version PLUS the file's mtime.
+	 * The mtime advances on every deploy even when the framework's manifest
+	 * version is being served from a stale persistent object cache (as on hosts
+	 * with Memcached), so a changed asset always gets a fresh URL and can never
+	 * stick behind a CDN/browser cache. Falls back to the bare version if the
+	 * file can't be stat'd.
+	 */
+	private function asset_ver( $rel_path ) {
+		$ver = $this->manifest->get_version();
+		$mt  = @filemtime( $this->get_declared_path( $rel_path ) );
+		return $mt ? ( $ver . '.' . $mt ) : $ver;
+	}
+
+	/**
 	 * Assets for the editor chrome (the shell document around the iframe).
 	 */
 	private function enqueue_shell_assets() {
-		$ver  = $this->manifest->get_version();
 		$post = get_queried_object();
 
 		// Bring the framework's options-editing runtime (fw.OptionsModal + every
@@ -353,14 +396,14 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'fw-live-editor',
 			fw_min_uri( $this->get_declared_URI( '/static/css/live-editor.css' ) ),
 			array( 'dashicons' ),
-			$ver
+			$this->asset_ver( '/static/css/live-editor.css' )
 		);
 
 		wp_enqueue_script(
 			'fw-live-editor',
 			fw_min_uri( $this->get_declared_URI( '/static/js/live-editor.js' ) ),
 			array( 'jquery' ),
-			$ver,
+			$this->asset_ver( '/static/js/live-editor.js' ),
 			true
 		);
 
@@ -401,6 +444,25 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'builder'  => array(
 				'json' => isset( $builder_data['json'] ) ? $builder_data['json'] : '[]',
 			),
+			// Builder Templates (full / section / column). The shell drives the
+			// framework's standard `fw_builder_templates_*` admin-ajax handlers
+			// directly — they self-register on any admin-ajax request — so all we
+			// need to ship is the builder type + the nonces those handlers check.
+			// Gate on the page-builder extension being active (a hard requirement
+			// of this extension anyway): the FW_Ext_Builder_Templates class only
+			// autoloads when the page-builder option type initializes, which does
+			// NOT happen on this front-end shell — so class_exists() is the wrong
+			// test here. The AJAX endpoints still register fine on admin-ajax.
+			'templates' => array(
+				'enabled'     => (bool) fw_ext( 'page-builder' ),
+				'builderType' => 'page-builder',
+				'nonces'      => array(
+					'render'  => wp_create_nonce( 'fw_builder_templates' ),
+					'full'    => wp_create_nonce( 'fw_builder_templates_full' ),
+					'section' => wp_create_nonce( 'fw_builder_templates_section' ),
+					'column'  => wp_create_nonce( 'fw_builder_templates_column' ),
+				),
+			),
 			'l10n'     => array(
 				'title'       => __( 'Live Editor', 'fw' ),
 				'save'        => __( 'Save', 'fw' ),
@@ -426,6 +488,22 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'navigator'    => __( 'Sections', 'fw' ),
 				'noSections'   => __( 'No sections yet.', 'fw' ),
 				'renameTip'    => __( 'Double-click to rename', 'fw' ),
+				'templates'         => __( 'Templates', 'fw' ),
+				'templatesLoading'  => __( 'Loading templates…', 'fw' ),
+				'templatesError'    => __( 'Could not load templates.', 'fw' ),
+				'saveSection'       => __( 'Save current section as Template', 'fw' ),
+				'saveColumn'        => __( 'Save current column as Template', 'fw' ),
+				'templateName'      => __( 'Template Name', 'fw' ),
+				'saveTemplateTitle' => __( 'Save Template', 'fw' ),
+				'replacePageTitle'  => __( 'Replace page with this template?', 'fw' ),
+				'replacePageMsg'    => __( 'This swaps the entire page for the full template. You can Exit without saving (or Undo) to revert.', 'fw' ),
+				'replacePageOk'     => __( 'Replace', 'fw' ),
+				'deleteTemplateTitle' => __( 'Delete this template?', 'fw' ),
+				'deleteTemplateMsg'   => __( 'This permanently removes the saved template.', 'fw' ),
+				'noSectionSelected'   => __( 'Select a section first (click one on the page), then save it as a template.', 'fw' ),
+				'noColumnSelected'    => __( 'Select a column first (click one on the page), then save it as a template.', 'fw' ),
+				'noSectionTarget'     => __( 'Add or select a section first — a column template needs a section to drop into.', 'fw' ),
+				'importFailed'        => __( 'Failed to import template', 'fw' ),
 			),
 		) );
 	}
@@ -468,6 +546,49 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// base runtime + every shortcode option-type's static assets.
 		if ( function_exists( 'fw_ext_shortcodes_enqueue_shortcodes_admin_scripts' ) ) {
 			fw_ext_shortcodes_enqueue_shortcodes_admin_scripts();
+		}
+
+		// Define `fw.shortcodesLoadData` / `fw.unysonShortcodesData` right after
+		// fw.js. The wp-shortcodes TinyMCE plugin (pulled in by wp_enqueue_editor)
+		// and a few form-builder item scripts call these at load, but they're only
+		// registered in wp-admin — so on the front-end shell they throw
+		// "fw.shortcodesLoadData is not a function". An inline 'after' fw guarantees
+		// they exist before those footer scripts run (enqueuing the source script
+		// separately doesn't, since load order between footer siblings isn't fixed).
+		wp_add_inline_script(
+			'fw',
+			'if (window.fw && typeof fw.shortcodesLoadData !== "function") {'
+			. 'fw.shortcodesLoadData = (function ($) { var p = null; return function (f) { if (f) { p = null; } if (p) { return p; } p = $.post(window.ajaxurl, { action: "fw_ext_wp_shortcodes_data" }); return p; }; })(jQuery);'
+			. 'fw.unysonShortcodesData = function (f) { var p = fw.shortcodesLoadData(f); if (p.state() === "resolved" && p.responseJSON && p.responseJSON.success) { return p.responseJSON.data; } return null; };'
+			. '}',
+			'after'
+		);
+
+		// The wp-shortcodes TinyMCE plugin (the "Unyson Shortcodes" editor button)
+		// reads `fw_ext_wp_shortcodes_localizations`, localized only in wp-admin —
+		// without it the plugin throws "… is not defined" and fails to init. Provide
+		// it on the shell so the editor's shortcodes button works.
+		$wp_sc = fw_ext( 'wp-shortcodes' );
+		if ( $wp_sc && method_exists( $wp_sc, 'default_shortcodes_list' ) ) {
+			wp_localize_script(
+				'fw',
+				'fw_ext_wp_shortcodes_localizations',
+				array(
+					'button_title'            => __( 'Unyson Shortcodes', 'fw' ),
+					'default_shortcodes_list' => $wp_sc->default_shortcodes_list(),
+				)
+			);
+			// The plugin's CSS (button icon + the shortcode-picker grid window) is
+			// also admin-only — without it the button shows no icon and the picker
+			// renders as a tall, unstyled list.
+			if ( method_exists( $wp_sc, 'locate_css_URI' ) ) {
+				wp_enqueue_style(
+					'fw-ext-wp-shortcodes-css',
+					$wp_sc->locate_css_URI( 'styles' ),
+					array(),
+					fw()->manifest->get_version()
+				);
+			}
 		}
 
 		wp_enqueue_script( 'postbox' );        // now registered → fw chain prints
@@ -572,20 +693,18 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * Phase 1 grows this into the selection / outline layer.
 	 */
 	private function enqueue_frame_assets() {
-		$ver = $this->manifest->get_version();
-
 		wp_enqueue_style(
 			'fw-live-editor-frame',
 			fw_min_uri( $this->get_declared_URI( '/static/css/live-editor-frame.css' ) ),
 			array(),
-			$ver
+			$this->asset_ver( '/static/css/live-editor-frame.css' )
 		);
 
 		wp_enqueue_script(
 			'fw-live-editor-frame',
 			fw_min_uri( $this->get_declared_URI( '/static/js/live-editor-frame.js' ) ),
 			array( 'jquery' ),
-			$ver,
+			$this->asset_ver( '/static/js/live-editor-frame.js' ),
 			true
 		);
 
@@ -689,10 +808,18 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			$title = $builder_row['title'];
 		}
 
+		// Each shortcode declares its own modal width via `popup_size` (small /
+		// medium / large) — the classic builder honors it, so mirror that here
+		// instead of forcing one size for every element.
+		$popup_size = ( is_array( $builder_row ) && ! empty( $builder_row['popup_size'] ) )
+			? $builder_row['popup_size']
+			: '';
+
 		wp_send_json_success( array(
-			'tag'     => $tag,
-			'title'   => $title,
-			'options' => $this->transform_options_for_modal( (array) $shortcode->get_options() ),
+			'tag'        => $tag,
+			'title'      => $title,
+			'popup_size' => $popup_size,
+			'options'    => $this->transform_options_for_modal( (array) $shortcode->get_options() ),
 		) );
 	}
 

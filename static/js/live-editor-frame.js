@@ -16,6 +16,25 @@
 ( function ( $ ) {
 	'use strict';
 
+	// Restore non-passive listeners for interactive events on this iframe document.
+	// Some hosts/extensions globally force addEventListener passive, which breaks
+	// preventDefault() for clicks, drags and key handling. Mirrors the shell's
+	// <head> guard (the iframe is a separate document, so it needs its own).
+	( function () {
+		var orig  = EventTarget.prototype.addEventListener;
+		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1 };
+		EventTarget.prototype.addEventListener = function ( type, listener, options ) {
+			if ( force[ type ] ) {
+				if ( options && typeof options === 'object' ) {
+					if ( options.passive ) { options = Object.assign( {}, options, { passive: false } ); }
+				} else {
+					options = { capture: options === true, passive: false };
+				}
+			}
+			return orig.call( this, type, listener, options );
+		};
+	} )();
+
 	var NS    = 'fw-live-editor';
 	var DEBUG = true;
 
@@ -183,6 +202,7 @@
 				this.markEmptyColumns();
 				this.ensureAddSectionZone();
 				this.ensureSectionAddColZones();
+				this.refreshHiddenMarks();
 				this.log( 'started; indexed', Object.keys( this.index ).length, 'items' );
 			} else if ( data.type === 'replace' ) {
 				this.replaceItem( data.payload );
@@ -195,6 +215,7 @@
 				this.buildIndex( this.model, null );
 				this.ensureAddSectionZone();
 				this.ensureSectionAddColZones();
+				this.refreshHiddenMarks();
 			} else if ( data.type === 'insert-after' ) {
 				this.insertAfter( data.payload );
 			} else if ( data.type === 'insert-element' ) {
@@ -903,6 +924,7 @@
 			this.markEmptyColumns();
 			this.ensureSectionAddColZones();
 			this.ensureAddSectionZone();
+			this.refreshHiddenMarks();
 		},
 
 		/** The element that holds top-level sections. Prefer the page-builder
@@ -1138,6 +1160,7 @@
 			this.ensureSelectable( nu );
 			this.markEmptyColumns();
 			this.ensureSectionAddColZones();
+			this.applyHiddenMark( payload.id );
 
 			if ( this.hoverEl === old ) { this.hoverEl = null; }
 
@@ -1173,7 +1196,8 @@
 						type:      it.type,
 						shortcode: it.shortcode,
 						label:     labelFor( it ),
-						parentId:  parentId
+						parentId:  parentId,
+						hidden:    !! ( it.atts && it.atts._fw_hidden )
 					};
 				}
 				if ( it._items && it._items.length ) {
@@ -1193,7 +1217,10 @@
 				copy:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="5.5" y="5.5" width="7.5" height="7.5" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 10.5V4a1 1 0 0 1 1-1h6.5" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
 				edit:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M10.5 3l2.5 2.5-7 7-3 .5.5-3z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>',
 				trash: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M3.5 4.5h9M6 4.5V3h4v1.5M5 4.5l.6 8h4.8l.6-8" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-				addcol: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="3.5" width="4.5" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M11 5.5v5M8.5 8h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
+				addcol: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="3.5" width="4.5" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M11 5.5v5M8.5 8h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+				tpl:   '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 6h11M6 6v7.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+				eye:   '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+				eyeOff: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5c1.2 0 2.3.4 3.2 1M14.5 8S12 12.5 8 12.5c-1.2 0-2.3-.4-3.2-1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 2.5l11 11" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
 			};
 
 			var root = document.createElement( 'div' );
@@ -1207,6 +1234,8 @@
 						'<span class="fw-le-tag__label"></span>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-parent" title="Select parent">' + SVG.up + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-addcol" title="Add column" style="display:none">' + SVG.addcol + '</button>' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-savetpl" title="Save as Template" style="display:none">' + SVG.tpl + '</button>' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-hide" title="Hide on the live site">' + SVG.eye + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-duplicate" title="Duplicate">' + SVG.copy + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-edit" title="Edit">' + SVG.edit + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-tag__btn--danger fw-le-act-delete" title="Delete">' + SVG.trash + '</button>' +
@@ -1223,6 +1252,10 @@
 			this.els.activeBox = root.querySelector( '.fw-le-box--active' );
 			this.els.activeLbl = root.querySelector( '.fw-le-tag__label' );
 			this.els.addColBtn = root.querySelector( '.fw-le-act-addcol' );
+			this.els.saveTplBtn = root.querySelector( '.fw-le-act-savetpl' );
+			this.els.hideBtn   = root.querySelector( '.fw-le-act-hide' );
+			this._svgEye       = SVG.eye;
+			this._svgEyeOff    = SVG.eyeOff;
 			this.els.resize    = root.querySelector( '.fw-le-resize' );
 			this.els.resizeTip = root.querySelector( '.fw-le-resize-tip' );
 			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
@@ -1242,6 +1275,12 @@
 			on( '.fw-le-act-parent', function () { self.selectParent(); } );
 			on( '.fw-le-act-addcol', function () {
 				if ( self.activeId ) { self.toShell( 'add-column', { id: self.activeId } ); }
+			} );
+			on( '.fw-le-act-savetpl', function () {
+				if ( self.activeId ) { self.toShell( 'save-template-request', { id: self.activeId } ); }
+			} );
+			on( '.fw-le-act-hide', function () {
+				if ( self.activeId ) { self.toggleHidden( self.activeId ); }
 			} );
 			on( '.fw-le-act-duplicate', function () {
 				if ( self.activeId ) { self.toShell( 'duplicate-request', { id: self.activeId } ); }
@@ -1338,14 +1377,58 @@
 			this.placeActive( el );
 			this.els.activeLbl.textContent = ( this.index[ id ] && this.index[ id ].label ) || 'Element';
 
+			var meta = this.index[ id ] || {};
 			// "+ Column" is only meaningful on a section (adds a column to it).
-			var isSection = ( this.index[ id ] && /section$/.test( this.index[ id ].type || '' ) );
+			var isSection = /section$/.test( meta.type || '' );
 			if ( this.els.addColBtn ) { this.els.addColBtn.style.display = isSection ? '' : 'none'; }
+			// "Save as Template" applies to sections + columns (the granularities that
+			// have a template component on the server).
+			var isColumn = meta.type === 'column';
+			if ( this.els.saveTplBtn ) { this.els.saveTplBtn.style.display = ( isSection || isColumn ) ? '' : 'none'; }
+			this.updateTagHiddenState();
 			this.toShell( 'select', {
 				id:    id,
-				type:  this.index[ id ] && this.index[ id ].type,
-				label: this.index[ id ] && this.index[ id ].label
+				type:  meta.type,
+				label: meta.label
 			} );
+		},
+
+		/** Sync the hide button's icon + tooltip with the active item's state. */
+		updateTagHiddenState: function () {
+			var btn = this.els.hideBtn;
+			if ( ! btn ) { return; }
+			var meta = this.activeId ? this.index[ this.activeId ] : null;
+			var hidden = !! ( meta && meta.hidden );
+			btn.innerHTML = hidden ? this._svgEyeOff : this._svgEye;
+			btn.setAttribute( 'title', hidden ? 'Hidden on the live site — click to show' : 'Hide on the live site' );
+			btn.classList.toggle( 'is-on', hidden );
+		},
+
+		/** Toggle an item's front-end visibility. Optimistic: flip the local mark +
+		 *  button, then tell the shell to persist `_fw_hidden` into the model. */
+		toggleHidden: function ( id ) {
+			var meta = this.index[ id ];
+			if ( ! meta ) { return; }
+			meta.hidden = ! meta.hidden;
+			this.applyHiddenMark( id );
+			if ( id === this.activeId ) { this.updateTagHiddenState(); }
+			this.toShell( 'toggle-hidden', { id: id, hidden: meta.hidden } );
+		},
+
+		/** Dim the element for a single id according to its indexed hidden state. */
+		applyHiddenMark: function ( id ) {
+			var el = document.querySelector( '[data-fw-item-id="' + id + '"]' );
+			var meta = this.index[ id ];
+			if ( el && meta ) { el.classList.toggle( 'fw-le-item-hidden', !! meta.hidden ); }
+		},
+
+		/** Re-apply hidden dimming across the whole canvas (after load / re-render). */
+		refreshHiddenMarks: function () {
+			var els = document.querySelectorAll( '[data-fw-item-id]' );
+			for ( var i = 0; i < els.length; i++ ) {
+				var meta = this.index[ els[ i ].getAttribute( 'data-fw-item-id' ) ];
+				els[ i ].classList.toggle( 'fw-le-item-hidden', !! ( meta && meta.hidden ) );
+			}
 		},
 
 		selectParent: function () {

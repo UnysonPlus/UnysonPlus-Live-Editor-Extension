@@ -106,6 +106,12 @@
 		{ cols: [ '1_6', '1_6', '1_6', '1_6', '1_6', '1_6' ], parts: [ 2, 2, 2, 2, 2, 2 ] }
 	];
 
+	/** The template granularity ("full" | "section" | "column") an element in the
+	 *  injected templates HTML belongs to — read from its wrapping `[data-type]`. */
+	function tplTypeOf( $el ) {
+		return $el.closest( '.fw-builder-templates-type' ).attr( 'data-type' ) || '';
+	}
+
 	/** Index of the top-level item whose unique_id is `id` (or -1). */
 	function indexOfId( arr, id ) {
 		for ( var i = 0; i < arr.length; i++ ) {
@@ -178,6 +184,7 @@
 			this.$.save   = $( '#fw-le-save' );
 			this.$.undo   = $( '#fw-le-undo' );
 			this.$.redo   = $( '#fw-le-redo' );
+			this.$.preview = $( '#fw-le-preview' );
 
 			this.log( 'init', {
 				hasFrame:        this.$.frame.length > 0,
@@ -192,6 +199,7 @@
 			this.$.save.on( 'click', this.onSave.bind( this ) );
 			this.$.undo.on( 'click', this.undo.bind( this ) );
 			this.$.redo.on( 'click', this.redo.bind( this ) );
+			this.$.preview.on( 'click', this.onPreview.bind( this ) );
 
 			var self = this;
 			$( '#fw-le-devices' ).on( 'click', '.fw-le-device', function () {
@@ -296,6 +304,12 @@
 				case 'open-structure-picker':
 					this.openStructurePicker();
 					break;
+				case 'save-template-request':
+					this.saveItemAsTemplate( data.payload && data.payload.id );
+					break;
+				case 'toggle-hidden':
+					this.setItemHidden( data.payload );
+					break;
 				case 'undo':
 					this.undo();
 					break;
@@ -334,10 +348,27 @@
 			).insertAfter( this.$.addBtn );
 			this.$.navBtn.on( 'click', function () {
 				var open = ! $( 'body' ).hasClass( 'fw-le-nav-open' );
-				$( 'body' ).removeClass( 'fw-le-panel-open' ).toggleClass( 'fw-le-nav-open', open );
+				$( 'body' ).removeClass( 'fw-le-panel-open fw-le-tpl-open' ).toggleClass( 'fw-le-nav-open', open );
 				if ( open ) { self.refreshNavigator(); }
 			} );
 			this.buildNavigator();
+
+			// "Templates" — save the page / a section / a column as a reusable
+			// builder template, and drop saved templates back onto the canvas.
+			// Drives the framework's standard fw_builder_templates_* handlers.
+			if ( cfg.templates && cfg.templates.enabled ) {
+				this.$.tplBtn = $(
+					'<button type="button" id="fw-le-tpl-btn" class="fw-le-btn fw-le-btn--ghost">' +
+						'<span class="dashicons dashicons-screenoptions"></span> ' + ( ( cfg.l10n && cfg.l10n.templates ) || 'Templates' ) +
+					'</button>'
+				).insertAfter( this.$.navBtn );
+				this.$.tplBtn.on( 'click', function () {
+					var open = ! $( 'body' ).hasClass( 'fw-le-tpl-open' );
+					$( 'body' ).removeClass( 'fw-le-panel-open fw-le-nav-open' ).toggleClass( 'fw-le-tpl-open', open );
+					if ( open ) { self.refreshTemplates(); }
+				} );
+				this.buildTemplatesPanel();
+			}
 
 			var $panel = $(
 				'<aside id="fw-le-panel">' +
@@ -854,6 +885,377 @@
 			this.refreshNavigator();
 		},
 
+		/* ---- builder templates (full / section / column) --------------- */
+
+		/** Build the Templates side panel. Its body is filled on demand by
+		 *  refreshTemplates() with the framework's standard templates HTML; all
+		 *  clicks are delegated (bound once) so re-filling the body keeps working. */
+		buildTemplatesPanel: function () {
+			var l = cfg.l10n || {};
+			var $panel = this.$.tpl = $(
+				'<aside id="fw-le-templates">' +
+					'<div class="fw-le-panel__head"><strong>' + ( l.templates || 'Templates' ) + '</strong>' +
+						'<button type="button" class="fw-le-panel__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-tpl__body"></div>' +
+				'</aside>'
+			).appendTo( '#fw-live-editor-app' );
+
+			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-tpl-open' ); } );
+			this.bindTemplatesPanel();
+		},
+
+		/** POST to admin-ajax for a builder-templates action. These handlers use
+		 *  their own `_nonce` + `builder_type` (NOT the live-editor nonce), and
+		 *  self-register on any admin-ajax request, so we can drive them directly. */
+		tplAjax: function ( action, data, cb ) {
+			$.post( cfg.ajaxUrl, $.extend( { action: action }, data ) )
+				.done( cb )
+				.fail( function ( xhr ) {
+					window.console && console.error( '[fw-le-shell] tpl ajax error', action, xhr && xhr.status );
+				} );
+		},
+
+		/** (Re)load the saved-templates list for all three types. */
+		refreshTemplates: function () {
+			var self = this, t = cfg.templates, l = cfg.l10n || {};
+			var $body = this.$.tpl.find( '.fw-le-tpl__body' );
+			$body.html( '<div class="fw-le-tpl__loading">' + ( l.templatesLoading || 'Loading templates…' ) + '</div>' );
+			this.tplAjax( 'fw_builder_templates_render', {
+				_nonce:       t.nonces.render,
+				builder_type: t.builderType
+			}, function ( json ) {
+				if ( ! ( json && json.success && json.data && typeof json.data.html === 'string' ) ) {
+					$body.html( '<div class="fw-le-tpl__error">' + ( l.templatesError || 'Could not load templates.' ) + '</div>' );
+					window.console && console.error( '[fw-le-shell] templates render failed', json );
+					return;
+				}
+				$body.html( json.data.html );
+				self.decorateTemplates( $body );
+			} );
+		},
+
+		/** Section/column accordions ship as "import-only" (their backend save is a
+		 *  per-element control). In the live editor we add a Save button there that
+		 *  captures the currently-selected section/column. */
+		decorateTemplates: function ( $body ) {
+			var l = cfg.l10n || {};
+			// The render ships the first type expanded — sync the chevron state.
+			$body.find( '.fw-builder-templates-type' ).each( function () {
+				$( this ).toggleClass( 'is-open', ! $( this ).find( '> .fw-builder-templates-type-content' ).hasClass( 'fw-hidden' ) );
+			} );
+			[ [ 'section', l.saveSection || 'Save current section as Template' ],
+			  [ 'column',  l.saveColumn  || 'Save current column as Template'  ] ].forEach( function ( pair ) {
+				$body.find( '.fw-builder-templates-type-' + pair[ 0 ] + ' .save-template-wrapper' ).each( function () {
+					if ( ! $( this ).find( 'a.save-template' ).length ) {
+						$( '<a href="#" class="save-template button button-primary"></a> ' ).text( pair[ 1 ] ).prependTo( this );
+					}
+				} );
+			} );
+		},
+
+		/** Bind every templates-panel interaction once (delegated on the body). */
+		bindTemplatesPanel: function () {
+			var self = this, t = cfg.templates;
+			var $body = this.$.tpl.find( '.fw-le-tpl__body' );
+
+			// Accordion: open the clicked type, collapse the others.
+			$body.on( 'click', '.fw-builder-templates-type-title', function ( e ) {
+				e.preventDefault();
+				var $type    = $( this ).closest( '.fw-builder-templates-type' );
+				var $content = $type.find( '> .fw-builder-templates-type-content' );
+				var willOpen = $content.hasClass( 'fw-hidden' );
+				$body.find( '.fw-builder-templates-type-content' ).addClass( 'fw-hidden' );
+				$body.find( '.fw-builder-templates-type' ).removeClass( 'is-open' );
+				if ( willOpen ) { $content.removeClass( 'fw-hidden' ); $type.addClass( 'is-open' ); }
+			} );
+
+			// Load a saved template → insert it into the page.
+			$body.on( 'click', 'a[data-load-template]', function ( e ) {
+				e.preventDefault();
+				var type = tplTypeOf( $( this ) ), id = $( this ).attr( 'data-load-template' );
+				if ( ! type ) { return; }
+				self.tplAjax( 'fw_builder_templates_' + type + '_load', {
+					_nonce: t.nonces[ type ], builder_type: t.builderType, template_id: id
+				}, function ( json ) {
+					if ( json && json.success && json.data && typeof json.data.json === 'string' ) {
+						self.insertTemplate( type, json.data.json );
+					} else {
+						window.console && console.error( '[fw-le-shell] template load failed', json );
+					}
+				} );
+			} );
+
+			// Delete a saved template.
+			$body.on( 'click', 'a[data-delete-template]', function ( e ) {
+				e.preventDefault();
+				var type = tplTypeOf( $( this ) ), id = $( this ).attr( 'data-delete-template' ), l = cfg.l10n || {};
+				if ( ! type ) { return; }
+				self.confirm( {
+					title:       l.deleteTemplateTitle || 'Delete this template?',
+					message:     l.deleteTemplateMsg || '',
+					confirmText: 'Delete', danger: true
+				}, function () {
+					self.tplAjax( 'fw_builder_templates_' + type + '_delete', {
+						_nonce: t.nonces[ type ], builder_type: t.builderType, template_id: id
+					}, function ( json ) {
+						if ( json && json.success ) { self.refreshTemplates(); }
+						else { window.console && console.error( '[fw-le-shell] template delete failed', json ); }
+					} );
+				} );
+			} );
+
+			// Export a saved template → download the JSON envelope.
+			$body.on( 'click', 'a[data-export-template]', function ( e ) {
+				e.preventDefault();
+				var type = tplTypeOf( $( this ) ), id = $( this ).attr( 'data-export-template' );
+				if ( ! type ) { return; }
+				self.tplAjax( 'fw_builder_templates_' + type + '_export', {
+					_nonce: t.nonces[ type ], builder_type: t.builderType, template_id: id
+				}, function ( json ) {
+					if ( ! ( json && json.success && json.data && json.data.content ) ) {
+						window.console && console.error( '[fw-le-shell] template export failed', json ); return;
+					}
+					var blob = new Blob( [ JSON.stringify( json.data.content, null, 2 ) ], { type: 'application/json' } );
+					var url  = URL.createObjectURL( blob );
+					var a    = document.createElement( 'a' );
+					a.href = url; a.download = json.data.filename || 'template.json';
+					document.body.appendChild( a ); a.click(); document.body.removeChild( a );
+					window.setTimeout( function () { URL.revokeObjectURL( url ); }, 1000 );
+				} );
+			} );
+
+			// Import: the link opens the hidden file input next to it.
+			$body.on( 'click', 'a.import-template', function ( e ) {
+				e.preventDefault();
+				var $input = $( this ).closest( '.save-template-wrapper' ).find( 'input.template-import-file' );
+				$input.val( '' ); $input.trigger( 'click' );
+			} );
+			$body.on( 'change', 'input.template-import-file', function () {
+				var file = this.files && this.files[ 0 ];
+				if ( ! file ) { return; }
+				var type = tplTypeOf( $( this ) );
+				if ( ! type ) { return; }
+				var fd = new FormData();
+				fd.append( 'action', 'fw_builder_templates_' + type + '_import' );
+				fd.append( '_nonce', t.nonces[ type ] );
+				fd.append( 'builder_type', t.builderType );
+				fd.append( 'template_file', file );
+				$.ajax( { type: 'post', dataType: 'json', url: cfg.ajaxUrl, data: fd, processData: false, contentType: false } )
+					.done( function ( json ) {
+						if ( json && json.success ) { self.refreshTemplates(); }
+						else {
+							window.alert( ( json && json.data && json.data.message ) || ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template' );
+						}
+					} )
+					.fail( function () { window.alert( ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template' ); } );
+			} );
+
+			// Save the page / current section / current column as a template.
+			$body.on( 'click', 'a.save-template', function ( e ) {
+				e.preventDefault();
+				var type = tplTypeOf( $( this ) );
+				if ( type ) { self.saveTemplate( type ); }
+			} );
+		},
+
+		/** Walk up from the current selection to the enclosing section (or null). */
+		currentSectionNode: function () {
+			var cur = this.selectedId, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				var n = this.index[ cur ].node;
+				if ( n && /section$/.test( n.type || '' ) ) { return n; }
+				cur = this.index[ cur ].parentId;
+			}
+			return null;
+		},
+
+		/** Walk up from the current selection to the enclosing column (or null). */
+		currentColumnNode: function () {
+			var cur = this.selectedId, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				var n = this.index[ cur ].node;
+				if ( n && n.type === 'column' ) { return n; }
+				cur = this.index[ cur ].parentId;
+			}
+			return null;
+		},
+
+		/** Prompt for a template name (reusing fw.OptionsModal, like the backend),
+		 *  then cb(name). Falls back to window.prompt if the runtime is missing. */
+		promptTemplateName: function ( cb ) {
+			this.whenRuntimeReady( function ( ok ) {
+				var l = cfg.l10n || {};
+				if ( ! ok ) {
+					var name = window.prompt( l.templateName || 'Template Name', '' );
+					if ( name !== null ) { cb( name ); }
+					return;
+				}
+				var modal = new fw.OptionsModal( {
+					title:   l.saveTemplateTitle || 'Save Template',
+					options: [ { 'template_name': { 'type': 'text', 'label': l.templateName || 'Template Name' } } ],
+					values:  {}
+				} );
+				modal.on( 'change:values', function ( m, values ) { cb( ( values && values.template_name ) || '' ); } );
+				modal.open();
+			} );
+		},
+
+		/** Save the appropriate JSON for `type` as a new template. */
+		saveTemplate: function ( type ) {
+			var self = this, l = cfg.l10n || {};
+			var jsonKey, jsonVal;
+
+			if ( type === 'full' ) {
+				jsonKey = 'builder_json'; jsonVal = JSON.stringify( this.model );
+			} else if ( type === 'section' ) {
+				var sec = this.currentSectionNode();
+				if ( ! sec ) { window.alert( l.noSectionSelected || 'Select a section first.' ); return; }
+				jsonKey = 'section_json'; jsonVal = JSON.stringify( sec );
+			} else if ( type === 'column' ) {
+				var col = this.currentColumnNode();
+				if ( ! col ) { window.alert( l.noColumnSelected || 'Select a column first.' ); return; }
+				jsonKey = 'column_json'; jsonVal = JSON.stringify( col );
+			} else { return; }
+
+			this.promptTemplateName( function ( name ) {
+				var data = { _nonce: cfg.templates.nonces[ type ], builder_type: cfg.templates.builderType, template_name: name };
+				data[ jsonKey ] = jsonVal;
+				self.tplAjax( 'fw_builder_templates_' + type + '_save', data, function ( json ) {
+					if ( json && json.success ) { self.refreshTemplates(); }
+					else { window.console && console.error( '[fw-le-shell] template save failed', json ); }
+				} );
+			} );
+		},
+
+		/** Parse a loaded template's JSON and insert it for its granularity. */
+		insertTemplate: function ( type, jsonStr ) {
+			var parsed;
+			try { parsed = JSON.parse( jsonStr ); }
+			catch ( e ) { window.console && console.error( '[fw-le-shell] bad template json', e ); return; }
+			if ( type === 'full' ) { this.insertFullTemplate( parsed ); }
+			else if ( type === 'section' ) { this.insertSectionTemplate( parsed ); }
+			else if ( type === 'column' ) { this.insertColumnTemplate( parsed ); }
+		},
+
+		/** Full template → replace the entire page (confirmed; undoable). */
+		insertFullTemplate: function ( items ) {
+			if ( ! Array.isArray( items ) ) { items = items ? [ items ] : []; }
+			var self = this, l = cfg.l10n || {};
+			this.confirm( {
+				title:       l.replacePageTitle || 'Replace page with this template?',
+				message:     l.replacePageMsg || '',
+				confirmText: l.replacePageOk || 'Replace',
+				danger:      true
+			}, function () {
+				self.recordHistory();
+				// Fresh ids so the inserted tree can never collide with cached output.
+				self.model = items.map( function ( it ) { return self.cloneWithNewIds( it ); } );
+				self.rebuildIndex();
+				self.markDirty();
+				self.refreshNavigator();
+				self.renderPageToCanvas();
+				$( 'body' ).removeClass( 'fw-le-tpl-open' );
+			} );
+		},
+
+		/** Section template → append a new section to the page. */
+		insertSectionTemplate: function ( item ) {
+			if ( ! item || typeof item !== 'object' ) { return; }
+			var self = this;
+			var node = this.cloneWithNewIds( item );
+			var id   = ( node.atts && node.atts.unique_id ) || node.unique_id;
+			var prevLast = this.model.length ? this.model[ this.model.length - 1 ] : null;
+			var afterId  = prevLast ? ( ( prevLast.atts && prevLast.atts.unique_id ) || prevLast.unique_id ) : null;
+
+			this.recordHistory();
+			this.model.push( node );
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+			this.refreshNavigator();
+			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( node ) }, function ( r ) {
+				if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+					self.toFrame( 'insert-section', { html: r.data.html, id: id, afterId: afterId } );
+				} else {
+					window.console && console.error( '[fw-le-shell] section template render failed', r );
+				}
+			} );
+			$( 'body' ).removeClass( 'fw-le-tpl-open' );
+		},
+
+		/** Column template → add the column to the current (or last) section. */
+		insertColumnTemplate: function ( item ) {
+			if ( ! item || typeof item !== 'object' ) { return; }
+			var self = this;
+			var section = this.currentSectionNode() || ( this.model.length ? this.model[ this.model.length - 1 ] : null );
+			if ( ! section || ! isContainer( section ) ) {
+				window.alert( ( cfg.l10n && cfg.l10n.noSectionTarget ) || 'Add or select a section first.' ); return;
+			}
+			var sectionId = ( section.atts && section.atts.unique_id ) || section.unique_id;
+			var col       = this.cloneWithNewIds( item );
+			var newColId  = ( col.atts && col.atts.unique_id ) || col.unique_id;
+
+			this.recordHistory();
+			columnArrayOf( section ).push( col );
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+			this.refreshNavigator();
+			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( section ) }, function ( r ) {
+				if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+					self.toFrame( 'replace', { id: sectionId, html: r.data.html, selectId: newColId } );
+				} else {
+					window.console && console.error( '[fw-le-shell] column template render failed', r );
+				}
+			} );
+			$( 'body' ).removeClass( 'fw-le-tpl-open' );
+		},
+
+		/** Save a specific in-canvas item (section or column) as a template — the
+		 *  in-canvas "Save as Template" control. Only sections + columns qualify. */
+		saveItemAsTemplate: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			var t = cfg.templates;
+			if ( ! ( t && t.enabled ) ) {
+				window.alert( ( cfg.l10n && cfg.l10n.templatesError ) || 'Templates are unavailable.' ); return;
+			}
+			var type = /section$/.test( node.type || '' ) ? 'section'
+				: ( node.type === 'column' ? 'column' : '' );
+			if ( ! type ) { return; }
+
+			var self = this;
+			this.promptTemplateName( function ( name ) {
+				var data = { _nonce: t.nonces[ type ], builder_type: t.builderType, template_name: name };
+				data[ type + '_json' ] = JSON.stringify( node );
+				self.tplAjax( 'fw_builder_templates_' + type + '_save', data, function ( json ) {
+					if ( json && json.success ) {
+						if ( $( 'body' ).hasClass( 'fw-le-tpl-open' ) ) { self.refreshTemplates(); }
+					} else {
+						window.console && console.error( '[fw-le-shell] save item template failed', json );
+					}
+				} );
+			} );
+		},
+
+		/** Persist an item's front-end visibility. The frame toggled its dim + eye
+		 *  optimistically; here we write `_fw_hidden` into the model (which the save
+		 *  regenerates into the shortcode, where the render filter honours it) and
+		 *  re-sync the frame so undo/redo + save stay consistent. */
+		setItemHidden: function ( payload ) {
+			payload = payload || {};
+			var node = this.nodeOf( payload.id );
+			if ( ! node ) { return; }
+			if ( ! node.atts ) { node.atts = {}; }
+			var want = !! payload.hidden;
+			if ( want === !! node.atts._fw_hidden ) { return; }
+			this.recordHistory();
+			if ( want ) { node.atts._fw_hidden = true; }
+			else { delete node.atts._fw_hidden; }
+			this.markDirty();
+			this.syncFrameModel();
+		},
+
 		/* ---- pointer-capture drag from the panel ----------------------- */
 
 		startPanelDrag: function ( info, e ) {
@@ -1208,6 +1610,7 @@
 
 			this.$.breadcrumb.empty();
 			var id = payload && payload.id;
+			this.selectedId = ( id && this.index[ id ] ) ? id : null;
 			if ( ! id || ! this.index[ id ] ) { return; }
 
 			// Walk parentIds (root → selected).
@@ -1246,15 +1649,21 @@
 					return;
 				}
 
-				self.fetchOptions( tagFor( node ), function ( options ) {
+				self.fetchOptions( tagFor( node ), function ( options, popupSize ) {
 					if ( self.modal ) { try { self.modal.close(); } catch ( e ) {} }
 
-					self.log( 'opening modal for', id, 'with', ( options || [] ).length, 'option groups' );
+					// Use the shortcode's own popup_size (matches the classic builder);
+					// fall back to large for containers / medium for leaves.
+					var size = ( popupSize === 'small' || popupSize === 'medium' || popupSize === 'large' )
+						? popupSize
+						: ( isContainer( node ) ? 'large' : 'medium' );
+
+					self.log( 'opening modal for', id, 'with', ( options || [] ).length, 'option groups', 'size:', size );
 					self.modal = new fw.OptionsModal( {
 						title:   labelFor( node ),
 						options: options,
 						values:  node.atts || {},
-						size:    isContainer( node ) ? 'large' : 'medium'
+						size:    size
 					} );
 
 					// One undo entry per edit session: snapshot the pre-edit model
@@ -1287,7 +1696,7 @@
 		fetchOptions: function ( tag, cb ) {
 			this.ajax( cfg.actions.itemOptions, { tag: tag }, function ( resp ) {
 				if ( resp && resp.success && resp.data && resp.data.options ) {
-					cb( resp.data.options );
+					cb( resp.data.options, resp.data.popup_size || '' );
 				} else {
 					window.console && console.error( '[fw-le-shell] options load failed', resp );
 				}
@@ -1417,6 +1826,12 @@
 					self.setStatus( 'unsaved', ( cfg.l10n && cfg.l10n.saveError ) || 'Save failed' );
 				}
 			} );
+		},
+
+		/** Open the live page in a new tab. Shows the saved version — if there are
+		 *  unsaved edits, Save first to see them on the page. */
+		onPreview: function () {
+			window.open( cfg.exitUrl || '/', '_blank', 'noopener' );
 		},
 
 		onExit: function () {

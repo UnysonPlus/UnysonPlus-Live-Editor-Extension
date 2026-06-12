@@ -307,8 +307,23 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	background: #e2483d;
 }
 
+/* Hide/Show eye while the item is hidden — accented so the state reads at a glance. */
+#fw-le-overlay .fw-le-tag__btn.is-on {
+	color: #ffd479;
+	background: rgba( 255, 212, 121, .16 );
+}
+
 #fw-le-overlay .fw-le-act-drag {
 	cursor: grab;
+}
+
+/* An item hidden on the live site — dimmed + dashed in the editor so it's clearly
+ * "off" but still visible, selectable and toggleable. */
+.fw-le-item-hidden {
+	opacity: .38 !important;
+	outline: 1px dashed rgba( 120, 120, 120, .65 );
+	outline-offset: -1px;
+	position: relative;
 }
 
 /* ---- Column resize grip (right edge of a selected column) ----------------- */

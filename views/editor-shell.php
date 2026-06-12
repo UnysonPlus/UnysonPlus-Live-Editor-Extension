@@ -28,6 +28,11 @@ if ( ! $fw_le_post instanceof WP_Post ) {
 $fw_le_ext       = fw_ext( 'live-editor' );
 $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_permalink( $fw_le_post );
 
+// Never let a browser (or proxy) reuse a stale editor shell: the shell inlines
+// the localized config + versioned asset URLs, so a cached shell can silently
+// run an older editor (e.g. missing the Templates button). Force revalidation.
+nocache_headers();
+
 ?><!doctype html>
 <html <?php language_attributes(); ?> class="fw-live-editor-html">
 <head>
@@ -43,9 +48,34 @@ $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_p
 	// script runs so the options modal works on this front-end shell.
 	?>
 	<script>window.ajaxurl = window.ajaxurl || <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>;</script>
+	<?php
+	// Some hosts / extensions globally patch addEventListener to force
+	// `passive: true`, which silently breaks `preventDefault()` for clicks, form
+	// submits and pointer drags — e.g. the icon picker's Save submit reloads
+	// instead of applying, and panel drags warn. Interactive events are
+	// non-passive by default anyway, so restore that. Printed before wp_head() so
+	// this wrapper sits closest to native (any later patcher wraps it, and our
+	// passive:false has the final say).
+	?>
+	<script>
+	( function () {
+		var orig  = EventTarget.prototype.addEventListener;
+		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1 };
+		EventTarget.prototype.addEventListener = function ( type, listener, options ) {
+			if ( force[ type ] ) {
+				if ( options && typeof options === 'object' ) {
+					if ( options.passive ) { options = Object.assign( {}, options, { passive: false } ); }
+				} else {
+					options = { capture: options === true, passive: false };
+				}
+			}
+			return orig.call( this, type, listener, options );
+		};
+	} )();
+	</script>
 	<?php wp_head(); ?>
 </head>
-<body class="fw-live-editor-shell">
+<body class="fw-live-editor-shell admin-color-fresh">
 
 	<div id="fw-live-editor-app" class="fw-le-app">
 
@@ -81,6 +111,9 @@ $fw_le_frame_url = $fw_le_ext ? $fw_le_ext->get_frame_url( $fw_le_post ) : get_p
 				</button>
 				<button type="button" id="fw-le-redo" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Redo (Ctrl+Y)', 'fw' ); ?>" disabled>
 					<span class="dashicons dashicons-redo"></span>
+				</button>
+				<button type="button" id="fw-le-preview" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Preview (opens in a new tab)', 'fw' ); ?>">
+					<span class="dashicons dashicons-visibility"></span>
 				</button>
 				<button type="button" id="fw-le-exit" class="fw-le-btn fw-le-btn--ghost">
 					<span class="dashicons dashicons-no-alt"></span>
