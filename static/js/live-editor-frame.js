@@ -192,6 +192,7 @@
 			if ( ! nu ) { return; }
 
 			ref.parentNode.insertBefore( nu, ref.nextSibling );
+			this.ensureSelectable( nu );
 			this.select( nu, payload.id );
 		},
 
@@ -432,7 +433,18 @@
 				var content = leaves.length ? leaves[ leaves.length - 1 ].parentNode : col;
 				content.appendChild( nu );
 			}
+			this.ensureSelectable( nu );
 			this.select( nu, payload.id );
+		},
+
+		/** Inline / empty elements (e.g. an icon with no glyph) can render to a
+		 *  0×0 box that's impossible to hover or reselect. Force such collapsed
+		 *  items to a clickable block so the editor can always reach them. */
+		ensureSelectable: function ( el ) {
+			if ( ! el || ! el.getBoundingClientRect ) { return; }
+			var r = el.getBoundingClientRect();
+			if ( r.height < 8 && r.width < 8 ) { el.classList.add( 'fw-le-collapsed' ); }
+			else { el.classList.remove( 'fw-le-collapsed' ); }
 		},
 
 		nearestColumnEl: function ( el ) {
@@ -552,6 +564,7 @@
 			if ( ! nu ) { this.log( 'replace: empty html' ); return; }
 
 			old.parentNode.replaceChild( nu, old );
+			this.ensureSelectable( nu );
 
 			if ( this.hoverEl === old ) { this.hoverEl = null; }
 			if ( this.activeEl === old || this.activeId === payload.id ) {
@@ -665,7 +678,7 @@
 					e.stopPropagation();
 					self.select( hit.el, hit.id );
 				}
-			}, true );
+			}, { capture: true, passive: false } );
 
 			// Double-click a text block to edit it inline (cursor at the click point).
 			document.addEventListener( 'dblclick', function ( e ) { self.onDblClick( e ); }, false );
@@ -680,14 +693,9 @@
 			};
 			window.addEventListener( 'scroll', reflow, true );
 			window.addEventListener( 'resize', reflow, false );
-
-			// Native drag-and-drop from the shell's element panel into the canvas.
-			// dragenter AND dragover must preventDefault to register a drop target
-			// (cross-iframe drags are strict about this).
-			document.addEventListener( 'dragenter', function ( e ) { self.onAddDragEnter( e ); }, false );
-			document.addEventListener( 'dragover', function ( e ) { self.onAddDragOver( e ); }, false );
-			document.addEventListener( 'drop', function ( e ) { self.onAddDrop( e ); }, false );
-			document.addEventListener( 'dragleave', function ( e ) { self.onAddDragLeave( e ); }, false );
+			// Drag-to-add uses the shell's pointer-capture relay (add-dragover /
+			// add-drop messages → pointerAddOver / pointerAddDrop), not native DnD,
+			// since native HTML5 DnD can't reliably cross the same-origin iframe.
 		},
 
 		selectableFrom: function ( el ) {

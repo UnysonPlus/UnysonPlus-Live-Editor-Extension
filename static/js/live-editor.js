@@ -299,6 +299,14 @@
 					beforeId:       payload.beforeId,
 					id:             id
 				} );
+
+				// Open the editor right away so a just-added element can always be
+				// configured (many render empty until set up). Text blocks are
+				// skipped — they arrive with visible content and are double-click
+				// editable.
+				if ( item.shortcode !== 'text_block' ) {
+					window.setTimeout( function () { self.openEditor( id ); }, 80 );
+				}
 			} );
 		},
 

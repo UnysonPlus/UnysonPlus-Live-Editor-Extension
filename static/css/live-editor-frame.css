@@ -15,6 +15,30 @@ body.fw-live-editor-frame-active {
 	cursor: default;
 }
 
+/* A collapsed (0×0) element — e.g. an inline icon with no glyph — is forced to a
+ * visible, clickable block in edit mode so it can always be selected and edited. */
+body.fw-live-editor-frame-active .fw-le-collapsed {
+	display: block !important;
+	min-width: 90px;
+	min-height: 30px;
+	padding-top: 1rem;
+	padding-bottom: 1rem;
+	position: relative;
+}
+
+body.fw-live-editor-frame-active .fw-le-collapsed::after {
+	content: "Empty — click \270E to edit";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	font-style: italic;
+	color: #8a8f9c;
+	pointer-events: none;
+}
+
 /* Inline text editing (double-click a text block). */
 body.fw-live-editor-frame-active .fw-le-editing {
 	outline: 2px solid #4f8cff !important;
@@ -37,10 +61,13 @@ body.fw-live-editor-frame-active .fw-le-empty-item {
 	background: rgba( 79, 140, 255, .04 );
 }
 
-/* Faint guide on every selectable item so the structure is visible at a glance. */
+/* Faint guide on every selectable item so the structure is visible at a glance.
+ * The min-height keeps an element that renders (near-)empty from collapsing to an
+ * unselectable sliver, so it can always be hovered, selected and edited again. */
 body.fw-live-editor-frame-active [data-fw-item-id] {
 	outline: 1px dashed rgba( 79, 140, 255, .18 );
 	outline-offset: -1px;
+	min-height: 14px;
 }
 
 /* ---- Overlay root --------------------------------------------------------- */

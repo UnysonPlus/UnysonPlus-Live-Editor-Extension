@@ -334,6 +334,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// same loader the page-builder uses on the post-edit screen.
 		$this->enqueue_options_runtime();
 
+		// Some option types print their JS <script type="text/html"> templates
+		// (e.g. the icon picker's #tmpl-fw-icon-v2-*) on the admin-only
+		// `admin_print_footer_scripts` hook, which never fires on the front end —
+		// so their modal controls render blank. Bridge that hook to wp_footer so
+		// those templates are emitted into the shell.
+		add_action( 'wp_footer', function () { do_action( 'admin_print_footer_scripts' ); }, 9 );
+
 		// Deliberately do NOT depend on the framework options runtime here: if any
 		// runtime handle failed to load, WordPress would drop a dependent script,
 		// taking the editor's connect/selection logic down with it. The shell only
@@ -508,10 +515,20 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	private function get_insertable_elements() {
 		$out = array();
 		$sc  = fw_ext( 'shortcodes' );
-		if ( ! $sc || ! method_exists( $sc, 'get_builder_data' ) ) {
+		if ( ! $sc || ! method_exists( $sc, 'get_shortcodes' ) || ! method_exists( $sc, 'get_shortcode_builder_data' ) ) {
 			return $out;
 		}
-		foreach ( (array) $sc->get_builder_data() as $tag => $row ) {
+
+		// Make sure every shortcode is loaded, then build the list PER SHORTCODE.
+		// (Using the aggregate get_builder_data() risks a stale partial cache that
+		// was populated before all shortcodes finished loading.)
+		$this->load_shortcodes();
+
+		foreach ( array_keys( (array) $sc->get_shortcodes() ) as $tag ) {
+			$row = $sc->get_shortcode_builder_data( $tag );
+			if ( ! is_array( $row ) ) {
+				continue; // not a "simple" page-builder element (e.g. section/column/row)
+			}
 			$out[] = array(
 				'tag'   => $tag,
 				'title' => isset( $row['title'] ) && $row['title'] !== '' ? $row['title'] : $tag,

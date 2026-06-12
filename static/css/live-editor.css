@@ -381,6 +381,22 @@ body.fw-le-panel-open #fw-le-canvas { padding-left: 280px; }
 body.fw-le-adding { cursor: grabbing; }
 body.fw-le-adding * { cursor: grabbing !important; }
 
+/* The WordPress media frame (icon picker / media-image fields) is built for
+ * wp-admin and doesn't reliably get its fixed-overlay positioning on a front-end
+ * document, so it floats off-position. Pin it as a centered overlay above the
+ * options modal. */
+body.fw-live-editor-shell .media-modal {
+	position: fixed !important;
+	inset: 5vh 5vw !important;
+	z-index: 200000 !important;
+}
+
+body.fw-live-editor-shell .media-modal-backdrop {
+	position: fixed !important;
+	inset: 0 !important;
+	z-index: 199990 !important;
+}
+
 /* Floating ghost that follows the cursor while dragging a panel element. */
 .fw-le-drag-ghost {
 	position: fixed;
