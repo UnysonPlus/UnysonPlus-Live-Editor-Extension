@@ -73,6 +73,12 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_revisions', array( $this, '_ajax_revisions' ) );
 		add_action( 'wp_ajax_fw_live_editor_revision_get', array( $this, '_ajax_revision_get' ) );
 
+		// Snapshot a revision whenever the builder content is saved through ANY
+		// editor (the live editor's _ajax_save AND the classic backend builder both
+		// go through fw_set_db_post_option, which fires this). The dedupe in
+		// store_revision() keeps the shared history free of duplicates.
+		add_action( 'fw_post_options_update', array( $this, '_action_snapshot_revision' ), 10, 2 );
+
 		// --- Edit-mode render filters. ---
 		// These act inside the iframe (frame request) AND during the single-item
 		// render AJAX (force_edit_render) — the latter happens under admin-ajax,
@@ -256,10 +262,16 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			return;
 		}
 
+		// Brand the entry with the UnysonPlus mark (the same white U+ logo shown in
+		// the editor toolbar) instead of the generic pencil dashicon, so it reads as
+		// our tool rather than a stock WP edit link.
+		$logo = esc_url( $this->get_declared_URI( '/static/img/unysonplus-logo.png' ) );
+		$icon = '<img src="' . $logo . '" alt="" aria-hidden="true" '
+		      . 'style="height:16px;width:auto;vertical-align:middle;margin:0 6px 0 2px;position:relative;top:-1px;" />';
+
 		$wp_admin_bar->add_node( array(
 			'id'    => 'fw-live-editor',
-			'title' => '<span class="ab-icon dashicons dashicons-edit" style="top:2px;"></span>'
-			         . esc_html__( 'Edit Live', 'fw' ),
+			'title' => $icon . esc_html__( 'Edit Live', 'fw' ),
 			'href'  => $this->get_boot_url( $post ),
 			'meta'  => array(
 				'title' => esc_attr__( 'Edit this page with the Live Page Editor', 'fw' ),
@@ -1325,17 +1337,27 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @param string $json
 	 */
 	private function store_revision( $post_id, $json ) {
+		$index = get_post_meta( $post_id, self::REVISIONS_INDEX_META, true );
+		if ( ! is_array( $index ) ) {
+			$index = array();
+		}
+
+		// Dedupe: skip if identical to the most recent revision. This also makes the
+		// feature double-fire-safe — the live-editor save creates one revision and
+		// the fw_post_options_update hook (which the same save triggers) then no-ops.
+		if ( ! empty( $index[0]['time'] ) ) {
+			$latest = get_post_meta( $post_id, self::REVISION_META_PREFIX . (int) $index[0]['time'], true );
+			if ( is_string( $latest ) && $latest === $json ) {
+				return;
+			}
+		}
+
 		$time = time();
 		$user = wp_get_current_user();
 
 		// wp_slash(): update_post_meta() wp_unslash()es internally; the JSON arrives
 		// already-unslashed, so re-slash or its backslashes are stripped.
 		update_post_meta( $post_id, self::REVISION_META_PREFIX . $time, wp_slash( $json ) );
-
-		$index = get_post_meta( $post_id, self::REVISIONS_INDEX_META, true );
-		if ( ! is_array( $index ) ) {
-			$index = array();
-		}
 
 		array_unshift( $index, array(
 			'time' => $time,
@@ -1353,6 +1375,38 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+	}
+
+	/**
+	 * Snapshot the builder content into the revision history when it is saved
+	 * through any editor. Fires on `fw_post_options_update`: option_id is the
+	 * page-builder key for the live editor's direct save, or null for the backend's
+	 * full post-options save — both mean the content may have changed.
+	 *
+	 * @param int        $post_id
+	 * @param string|null $option_id
+	 * @internal
+	 */
+	public function _action_snapshot_revision( $post_id, $option_id ) {
+		$pb = $this->pb();
+		if ( ! $pb || ! $pb->is_builder_post( $post_id ) ) {
+			return;
+		}
+
+		// Only the whole-post save (null) or the builder content option itself —
+		// not an unrelated single-option update.
+		if ( null !== $option_id && '' !== $option_id && $pb->get_option_key() !== $option_id ) {
+			return;
+		}
+
+		$data = fw_get_db_post_option( $post_id, $pb->get_option_key() );
+		$json = ( is_array( $data ) && isset( $data['json'] ) ) ? (string) $data['json'] : '';
+
+		if ( '' === $json || null === json_decode( $json, true ) ) {
+			return;
+		}
+
+		$this->store_revision( $post_id, $json ); // dedupe inside
 	}
 
 	/**
