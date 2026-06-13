@@ -85,9 +85,6 @@ nocache_headers();
 					<span class="dashicons dashicons-layout"></span>
 					<?php echo esc_html__( 'Live Editor', 'fw' ); ?>
 				</span>
-				<span id="fw-le-status" class="fw-le-status" data-state="connecting">
-					<?php echo esc_html__( 'Connecting…', 'fw' ); ?>
-				</span>
 				<span class="fw-le-doc-title"><?php echo esc_html( get_the_title( $fw_le_post ) ); ?></span>
 			</div>
 
@@ -106,6 +103,9 @@ nocache_headers();
 			</div>
 
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--right">
+				<span id="fw-le-status" class="fw-le-status" data-state="connecting">
+					<?php echo esc_html__( 'Connecting…', 'fw' ); ?>
+				</span>
 				<button type="button" id="fw-le-undo" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Undo (Ctrl+Z)', 'fw' ); ?>" disabled>
 					<span class="dashicons dashicons-undo"></span>
 				</button>

@@ -53,6 +53,10 @@
 		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
 	}
 
+	// Preview device → the responsive_hide choice key ("Hide on") that hides at
+	// that breakpoint. The eye toggles the key for whichever device is previewed.
+	var DEVICE_HIDE = { desktop: 'hide-md', tablet: 'hide-sm', mobile: 'hide-xs' };
+
 	// Twelfths → the page-builder width fraction id (mirrors builder grid.columns).
 	var GRID_ID = {
 		1: '1_12', 2: '1_6', 3: '1_4', 4: '1_3', 5: '5_12', 6: '1_2',
@@ -1238,20 +1242,31 @@
 			} );
 		},
 
-		/** Persist an item's front-end visibility. The frame toggled its dim + eye
-		 *  optimistically; here we write `_fw_hidden` into the model (which the save
-		 *  regenerates into the shortcode, where the render filter honours it) and
-		 *  re-sync the frame so undo/redo + save stay consistent. */
+		/** Persist an item's per-device visibility via the standard `responsive_hide`
+		 *  option ("Hide on" checkboxes). The frame toggled its dim + eye for the
+		 *  previewed device optimistically; here we set/clear that device's hide key
+		 *  in the model (which the save regenerates into the shortcode, where the
+		 *  existing responsive-hide CSS honours it) and re-sync the frame so the
+		 *  Advanced tab, undo/redo and save all stay consistent. */
 		setItemHidden: function ( payload ) {
 			payload = payload || {};
 			var node = this.nodeOf( payload.id );
 			if ( ! node ) { return; }
+			var cls = DEVICE_HIDE[ payload.device ] || DEVICE_HIDE.desktop;
 			if ( ! node.atts ) { node.atts = {}; }
+			// responsive_hide is a checkboxes value: a MAP of { 'hide-xs': true, … }.
+			// Its empty default arrives as a JS array ([]), and writing a string key
+			// to an array is silently dropped on JSON.stringify — so only reuse it
+			// when it's a real (non-array) object, else start a fresh map.
+			var rh = ( node.atts.responsive_hide && ! Array.isArray( node.atts.responsive_hide )
+				&& typeof node.atts.responsive_hide === 'object' )
+				? node.atts.responsive_hide : {};
 			var want = !! payload.hidden;
-			if ( want === !! node.atts._fw_hidden ) { return; }
+			if ( want === !! rh[ cls ] ) { return; }
 			this.recordHistory();
-			if ( want ) { node.atts._fw_hidden = true; }
-			else { delete node.atts._fw_hidden; }
+			if ( want ) { rh[ cls ] = true; }
+			else { delete rh[ cls ]; }
+			node.atts.responsive_hide = rh;
 			this.markDirty();
 			this.syncFrameModel();
 		},
@@ -1592,6 +1607,7 @@
 				this.setStatus( 'ready', ( cfg.l10n && cfg.l10n.ready ) || 'Ready' );
 			}
 			this.toFrame( 'init', { model: this.model } );
+			this.toFrame( 'set-device', { device: this.device || 'desktop' } );
 		},
 
 		/** Reflect the canvas selection as a clickable breadcrumb of the item's
@@ -1675,6 +1691,10 @@
 						if ( ! recorded ) { self.recordHistory( preState ); recorded = true; }
 						node.atts = $.extend( {}, node.atts, values );
 						self.markDirty();
+						// Keep the canvas index in sync so modal edits (e.g. the "Hide
+						// on" checkboxes, or a renamed css_id) are reflected by the eye /
+						// dimming / labels — not just the re-rendered HTML.
+						self.syncFrameModel();
 						self.renderItem( id );
 					} );
 
@@ -1860,12 +1880,16 @@
 		 *  so ask the frame to reposition it. */
 		setDevice: function ( device ) {
 			device = ( device === 'tablet' || device === 'mobile' ) ? device : 'desktop';
+			this.device = device;
 			$( 'body' )
 				.removeClass( 'fw-le-device-desktop fw-le-device-tablet fw-le-device-mobile' )
 				.addClass( 'fw-le-device-' + device );
 			$( '#fw-le-devices .fw-le-device' ).each( function () {
 				this.classList.toggle( 'is-active', this.getAttribute( 'data-device' ) === device );
 			} );
+			// Tell the canvas which device is previewed so the Hide/Show eye + the
+			// dimming of hidden items track the current breakpoint.
+			this.toFrame( 'set-device', { device: device } );
 			// The iframe transition settles after ~250ms; nudge the overlay then.
 			var self = this;
 			window.setTimeout( function () { self.toFrame( 'reflow', {} ); }, 280 );

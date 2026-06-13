@@ -68,13 +68,6 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		//    is resolved client-side from the model, so the HTML only needs the id —
 		//    no extra DOM, so the column grid / section layout is intact.
 		add_filter( 'sc_build_wrapper_attr', array( $this, '_filter_stamp_item_id' ), 999, 2 );
-		// 3. Front-end visibility: an item flagged `_fw_hidden` (set by the Live
-		//    Editor's Hide/Show eye) is wrapped in a display:none container so it
-		//    vanishes on the published page. NOT applied in edit-render — there the
-		//    item stays visible (the canvas dims it) so it remains selectable and
-		//    can be un-hidden. The `_fw_hidden` att round-trips through the JSON
-		//    attr coder, so it survives save → shortcode regeneration → render.
-		add_filter( 'fw_shortcode_render_view', array( $this, '_filter_hide_on_front' ), 999, 2 );
 
 		if ( ! is_admin() ) {
 			add_filter( 'template_include', array( $this, '_filter_template_include' ), 999 );
@@ -117,34 +110,30 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @internal
 	 */
 	public function _filter_stamp_item_id( $attr, $atts ) {
-		if ( $this->is_edit_render() && ! empty( $atts['unique_id'] ) ) {
+		if ( ! $this->is_edit_render() ) {
+			return $attr;
+		}
+
+		if ( ! empty( $atts['unique_id'] ) ) {
 			$attr['data-fw-item-id'] = $atts['unique_id'];
 		}
 
-		return $attr;
-	}
-
-	/**
-	 * Hide an item flagged `_fw_hidden` on the front end by wrapping its output in
-	 * a display:none container. Skipped in edit-render so the Live Editor canvas
-	 * keeps the item visible (dimmed) and selectable.
-	 *
-	 * @param array $view_extra { before, after } wrapping strings
-	 * @param array $atts       decoded shortcode attributes
-	 *
-	 * @return array
-	 * @internal
-	 */
-	public function _filter_hide_on_front( $view_extra, $atts ) {
-		if ( empty( $atts['_fw_hidden'] ) || $this->is_edit_render() ) {
-			return $view_extra;
+		// Visibility is driven by the responsive_hide option (the "Hide on"
+		// checkboxes), whose hide-xs/hide-sm/hide-md classes the frontend CSS
+		// turns into display:none per breakpoint. In the editor canvas we must
+		// NOT actually hide the element — it has to stay visible + selectable so
+		// it can be un-hidden — so strip those classes here. The Live Editor reads
+		// responsive_hide from the model and dims the item client-side instead.
+		if ( ! empty( $attr['class'] ) ) {
+			$attr['class'] = trim( preg_replace(
+				'/\b(?:hide-xs|hide-sm|hide-md)\b/',
+				'',
+				(string) $attr['class']
+			) );
+			$attr['class'] = preg_replace( '/\s+/', ' ', $attr['class'] );
 		}
 
-		$view_extra['before'] = '<div class="fw-pb-hidden-item" aria-hidden="true" style="display:none !important">'
-			. ( isset( $view_extra['before'] ) ? $view_extra['before'] : '' );
-		$view_extra['after']  = ( isset( $view_extra['after'] ) ? $view_extra['after'] : '' ) . '</div>';
-
-		return $view_extra;
+		return $attr;
 	}
 
 	/**

@@ -66,6 +66,17 @@
 		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
 	}
 
+	// Preview device → the responsive_hide ("Hide on") key that hides at that
+	// breakpoint, plus a human label for the eye's tooltip.
+	var DEVICE_HIDE  = { desktop: 'hide-md', tablet: 'hide-sm', mobile: 'hide-xs' };
+	var DEVICE_LABEL = { desktop: 'Desktop', tablet: 'Tablet', mobile: 'Mobile' };
+
+	/** Is `meta` hidden on `device`? Reads the responsive_hide map ({hide-md:true}). */
+	function hiddenOnDevice( meta, device ) {
+		var rh = meta && meta.responsiveHide;
+		return !! ( rh && rh[ DEVICE_HIDE[ device ] || DEVICE_HIDE.desktop ] );
+	}
+
 	// The page-builder 12-column grid: N twelfths → { width fraction id, the
 	// frontend grid classes }. Mirrors framework/extensions/builder/config.php
 	// `grid.columns` (the integer-twelfth widths; the odd 1/5 = sm-15 is omitted
@@ -124,6 +135,7 @@
 		hoverEl:  null,
 		activeEl: null,
 		activeId: null,
+		device:   'desktop',
 		rafPending: false,
 		announceTimer: null,
 		announceTries: 0,
@@ -224,6 +236,10 @@
 				this.insertSection( data.payload );
 			} else if ( data.type === 'render-page' ) {
 				this.renderPage( data.payload );
+			} else if ( data.type === 'set-device' ) {
+				this.device = ( data.payload && data.payload.device ) || 'desktop';
+				this.refreshHiddenMarks();
+				this.updateTagHiddenState();
 			} else if ( data.type === 'reflow' ) {
 				this.reposition();
 			} else if ( data.type === 'select-item' ) {
@@ -1197,7 +1213,10 @@
 						shortcode: it.shortcode,
 						label:     labelFor( it ),
 						parentId:  parentId,
-						hidden:    !! ( it.atts && it.atts._fw_hidden )
+						// Per-device "Hide on" map ({ 'hide-md': true, … }) — drives
+						// the eye state + canvas dimming for the previewed device.
+						responsiveHide: ( it.atts && it.atts.responsive_hide && typeof it.atts.responsive_hide === 'object' )
+							? it.atts.responsive_hide : null
 					};
 				}
 				if ( it._items && it._items.length ) {
@@ -1393,41 +1412,53 @@
 			} );
 		},
 
-		/** Sync the hide button's icon + tooltip with the active item's state. */
+		/** Sync the hide button's icon + tooltip with the active item's visibility
+		 *  on the PREVIEWED device (the eye reflects the current breakpoint). */
 		updateTagHiddenState: function () {
 			var btn = this.els.hideBtn;
 			if ( ! btn ) { return; }
 			var meta = this.activeId ? this.index[ this.activeId ] : null;
-			var hidden = !! ( meta && meta.hidden );
+			var hidden = hiddenOnDevice( meta, this.device );
+			var dev = DEVICE_LABEL[ this.device ] || 'this device';
 			btn.innerHTML = hidden ? this._svgEyeOff : this._svgEye;
-			btn.setAttribute( 'title', hidden ? 'Hidden on the live site — click to show' : 'Hide on the live site' );
+			btn.setAttribute( 'title', hidden
+				? ( 'Hidden on ' + dev + ' — click to show' )
+				: ( 'Hide on ' + dev ) );
 			btn.classList.toggle( 'is-on', hidden );
 		},
 
-		/** Toggle an item's front-end visibility. Optimistic: flip the local mark +
-		 *  button, then tell the shell to persist `_fw_hidden` into the model. */
+		/** Toggle the active item's visibility on the PREVIEWED device. Optimistic:
+		 *  flip the local responsive_hide map + dim + button, then tell the shell to
+		 *  persist it into the model's `responsive_hide` option. */
 		toggleHidden: function ( id ) {
 			var meta = this.index[ id ];
 			if ( ! meta ) { return; }
-			meta.hidden = ! meta.hidden;
+			var cls = DEVICE_HIDE[ this.device ] || DEVICE_HIDE.desktop;
+			// Empty default arrives as an array ([]); writing a string key to it is
+			// lost on serialize — so only reuse a real (non-array) object map.
+			var rh = ( meta.responsiveHide && ! Array.isArray( meta.responsiveHide )
+				&& typeof meta.responsiveHide === 'object' ) ? meta.responsiveHide : {};
+			var want = ! rh[ cls ];
+			if ( want ) { rh[ cls ] = true; } else { delete rh[ cls ]; }
+			meta.responsiveHide = rh;
 			this.applyHiddenMark( id );
 			if ( id === this.activeId ) { this.updateTagHiddenState(); }
-			this.toShell( 'toggle-hidden', { id: id, hidden: meta.hidden } );
+			this.toShell( 'toggle-hidden', { id: id, device: this.device, hidden: want } );
 		},
 
-		/** Dim the element for a single id according to its indexed hidden state. */
+		/** Dim a single id if it's hidden on the previewed device. */
 		applyHiddenMark: function ( id ) {
 			var el = document.querySelector( '[data-fw-item-id="' + id + '"]' );
 			var meta = this.index[ id ];
-			if ( el && meta ) { el.classList.toggle( 'fw-le-item-hidden', !! meta.hidden ); }
+			if ( el && meta ) { el.classList.toggle( 'fw-le-item-hidden', hiddenOnDevice( meta, this.device ) ); }
 		},
 
-		/** Re-apply hidden dimming across the whole canvas (after load / re-render). */
+		/** Re-apply hidden dimming across the canvas for the previewed device. */
 		refreshHiddenMarks: function () {
 			var els = document.querySelectorAll( '[data-fw-item-id]' );
 			for ( var i = 0; i < els.length; i++ ) {
 				var meta = this.index[ els[ i ].getAttribute( 'data-fw-item-id' ) ];
-				els[ i ].classList.toggle( 'fw-le-item-hidden', !! ( meta && meta.hidden ) );
+				els[ i ].classList.toggle( 'fw-le-item-hidden', hiddenOnDevice( meta, this.device ) );
 			}
 		},
 
