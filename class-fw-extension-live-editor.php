@@ -29,6 +29,10 @@
  */
 class FW_Extension_Live_Editor extends FW_Extension {
 
+	/** Post meta holding the background recovery autosave (separate from the live
+	 *  page-builder content). */
+	const AUTOSAVE_META = '_fw_le_autosave';
+
 	/** Query var that boots the editor shell (the chrome around the iframe). */
 	private $boot_query_var = 'fw-live-editor';
 
@@ -58,6 +62,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_new_column', array( $this, '_ajax_new_column' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
+		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
 
 		// --- Edit-mode render filters. ---
 		// These act inside the iframe (frame request) AND during the single-item
@@ -477,6 +482,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'newColumn'   => 'fw_live_editor_new_column',
 				'renderPage'  => 'fw_live_editor_render_page',
 				'save'        => 'fw_live_editor_save',
+				'autosave'    => 'fw_live_editor_autosave',
 			),
 			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
 			'elements' => $this->get_insertable_elements(),
@@ -498,6 +504,10 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'builder'  => array(
 				'json' => isset( $builder_data['json'] ) ? $builder_data['json'] : '[]',
 			),
+			// Background recovery autosave: how often to back up, plus any pending
+			// autosave that's NEWER than the last real save (offer to restore it).
+			'autosaveInterval' => 15000,
+			'autosave' => $this->get_pending_autosave( $post ),
 			// Builder Templates (full / section / column). The shell drives the
 			// framework's standard `fw_builder_templates_*` admin-ajax handlers
 			// directly — they self-register on any admin-ajax request — so all we
@@ -565,6 +575,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'settingsCopied'      => __( 'Settings copied', 'fw' ),
 				'noSettings'          => __( 'No settings copied yet — use "Copy Settings" first.', 'fw' ),
 				'noSettingsApplied'   => __( 'None of the copied settings apply to this element.', 'fw' ),
+				'restoreTitle'        => __( 'Restore unsaved changes?', 'fw' ),
+				'restoreMsg'          => __( 'We found autosaved changes from %s. Restore them, or discard and keep the last saved version?', 'fw' ),
+				'restore'             => __( 'Restore', 'fw' ),
+				'discard'             => __( 'Discard', 'fw' ),
+				'autoSaved'           => __( 'Auto Saved', 'fw' ),
 			),
 		) );
 	}
@@ -1274,7 +1289,78 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'builder_active' => $active,
 		) );
 
+		// A real save supersedes any recovery autosave.
+		delete_post_meta( $post_id, self::AUTOSAVE_META );
+
 		wp_send_json_success( array( 'saved' => true ) );
+	}
+
+	/**
+	 * A pending autosave to offer for restore: present only when an autosave exists
+	 * AND it is newer than the page's last real save (post_modified). The timestamp
+	 * check also prevents an old autosave from reverting later backend edits.
+	 *
+	 * @param WP_Post $post
+	 *
+	 * @return array { has, json?, timeText? }
+	 */
+	private function get_pending_autosave( WP_Post $post ) {
+		$raw = get_post_meta( $post->ID, self::AUTOSAVE_META, true );
+
+		if ( ! is_array( $raw ) || empty( $raw['json'] ) || empty( $raw['time'] ) ) {
+			return array( 'has' => false );
+		}
+
+		$modified = (int) get_post_modified_time( 'U', true, $post );
+		if ( (int) $raw['time'] <= $modified ) {
+			return array( 'has' => false ); // last save is newer — nothing to recover
+		}
+
+		return array(
+			'has'      => true,
+			'json'     => (string) $raw['json'],
+			'timeText' => sprintf(
+				/* translators: %s: human-readable time difference, e.g. "5 mins" */
+				__( '%s ago', 'fw' ),
+				human_time_diff( (int) $raw['time'] )
+			),
+		);
+	}
+
+	/**
+	 * Background recovery autosave. Stores the working builder JSON in a SEPARATE
+	 * post meta (never the live page-builder option) so a crash / accidental close
+	 * doesn't lose work — surfaced as a "restore unsaved changes" prompt on reopen.
+	 * POST `clear=1` removes it (used when the user discards the recovered version).
+	 *
+	 * @internal
+	 */
+	public function _ajax_autosave() {
+		$post_id = $this->verify_ajax();
+
+		if ( FW_Request::POST( 'clear' ) ) {
+			delete_post_meta( $post_id, self::AUTOSAVE_META );
+			wp_send_json_success();
+		}
+
+		$json    = (string) FW_Request::POST( 'json' );
+		$decoded = json_decode( $json, true );
+		if ( ! is_array( $decoded ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid builder data.', 'fw' ) ) );
+		}
+
+		$time = time();
+		// wp_slash(): update_post_meta() runs wp_unslash() on the value internally,
+		// but FW_Request::POST() already returned the JSON unslashed — so slash it
+		// back here, or every \" / \\ / \n in the JSON loses a backslash and it
+		// becomes unparseable on reload.
+		update_post_meta( $post_id, self::AUTOSAVE_META, wp_slash( array(
+			'json' => $json,
+			'time' => $time,
+			'user' => get_current_user_id(),
+		) ) );
+
+		wp_send_json_success( array( 'time' => $time ) );
 	}
 
 }

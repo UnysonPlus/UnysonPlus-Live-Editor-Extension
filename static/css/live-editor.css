@@ -107,6 +107,16 @@ body.fw-live-editor-shell {
 	background: #2ea066;
 }
 
+/* Auto-saved (recovery backup made) — distinct from a real save. */
+.fw-le-status[data-state="autosaved"] {
+	background: rgba(79, 140, 255, .16);
+	color: #8fb0ff;
+}
+
+.fw-le-status[data-state="autosaved"]::before {
+	background: #4f8cff;
+}
+
 /* Selected-item readout (populated on select). */
 .fw-le-selected {
 	font-size: 12px;

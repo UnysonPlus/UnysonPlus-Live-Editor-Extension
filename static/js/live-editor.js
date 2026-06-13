@@ -269,7 +269,88 @@
 				else if ( e.key === SETTINGS_KEY ) { self2.refreshSettingsPasteState(); }
 			} );
 
+			// Capture the very latest state on tab close (in case it changed since the
+			// last timer tick) — sendBeacon survives unload where XHR wouldn't.
+			window.addEventListener( 'beforeunload', function () {
+				if ( ! self2.dirty || ! navigator.sendBeacon ) { return; }
+				var json = JSON.stringify( self2.model );
+				if ( json === self2.lastAutosaveJson ) { return; }
+				self2.lastAutosaveJson = json;
+				try {
+					var fd = new FormData();
+					fd.append( 'action', cfg.actions.autosave );
+					fd.append( 'post_id', cfg.postId );
+					fd.append( 'nonce', cfg.nonce );
+					fd.append( 'json', json );
+					navigator.sendBeacon( cfg.ajaxUrl, fd );
+				} catch ( e ) {}
+			} );
+
 			this.setStatus( 'connecting', ( cfg.l10n && cfg.l10n.connecting ) || 'Connecting…' );
+
+			// Background recovery autosave: a periodic backup while there are unsaved
+			// changes, and a one-time "restore unsaved changes?" prompt on reopen.
+			this.lastAutosaveJson = JSON.stringify( this.model );
+			var interval = cfg.autosaveInterval || 15000;
+			this.autosaveTimer = window.setInterval( this.autosaveTick.bind( this ), interval );
+			this.maybeOfferAutosave();
+		},
+
+		/** Periodic recovery backup — only when there are unsaved changes that differ
+		 *  from the last backup (and not mid-save). */
+		autosaveTick: function () {
+			if ( ! this.dirty || this.saving ) { return; }
+			var json = JSON.stringify( this.model );
+			if ( json === this.lastAutosaveJson ) { return; }
+			this.lastAutosaveJson = json;
+			var self = this;
+			this.ajax( cfg.actions.autosave, { json: json }, function ( r ) {
+				if ( r && r.success ) {
+					self.setStatus( 'autosaved', ( cfg.l10n && cfg.l10n.autoSaved ) || 'Auto Saved' );
+				}
+			} );
+		},
+
+		/** Offer to restore an autosave that's newer than the last real save. */
+		maybeOfferAutosave: function () {
+			var a = cfg.autosave;
+			if ( ! ( a && a.has && a.json ) ) { return; }
+			var self = this;
+			this.confirm( {
+				title:       ( cfg.l10n && cfg.l10n.restoreTitle ) || 'Restore unsaved changes?',
+				message:     ( ( cfg.l10n && cfg.l10n.restoreMsg ) || 'We found autosaved changes from %s. Restore them, or discard and keep the last saved version?' ).replace( '%s', a.timeText || '' ),
+				confirmText: ( cfg.l10n && cfg.l10n.restore ) || 'Restore',
+				cancelText:  ( cfg.l10n && cfg.l10n.discard ) || 'Discard',
+				onCancel:    function () { self.discardAutosave(); }
+			}, function () { self.restoreAutosave( a.json ); } );
+		},
+
+		/** Load an autosaved model into the editor (becomes the working, dirty copy).
+		 *  Renders to the canvas if the frame is up; otherwise the frame's init
+		 *  handshake picks up the new model. */
+		restoreAutosave: function ( json ) {
+			var parsed;
+			// A corrupt backup (e.g. one written by an older build) can't be restored —
+			// clear it so it stops prompting, and bail.
+			try { parsed = JSON.parse( json ); } catch ( e ) { window.console && console.error( '[fw-le-shell] autosave parse failed', e ); this.discardAutosave(); return; }
+			if ( ! Array.isArray( parsed ) ) { this.discardAutosave(); return; }
+			this.model = parsed;
+			this.lastAutosaveJson = json;
+			this.rebuildIndex();
+			this.markDirty();
+			this.refreshNavigator();
+			// The canvas iframe shows the SAVED page (its DOM is the server-rendered
+			// saved content) — `init` only indexes it, it doesn't render the model. So
+			// we must re-render the restored model into the canvas. Defer if the frame
+			// hasn't announced ready yet (clicking Restore quickly would otherwise be
+			// a no-op and you'd keep seeing the saved page).
+			if ( this.frameReady ) { this.renderPageToCanvas(); }
+			else { this.pendingRender = true; }
+		},
+
+		/** Discard the pending autosave (server-side) so it stops prompting. */
+		discardAutosave: function () {
+			this.ajax( cfg.actions.autosave, { clear: 1 }, function () {} );
 		},
 
 		// index[id] = { node, siblings (the array containing node), parentId }.
@@ -1745,13 +1826,14 @@
 			$no.text( opts.cancelText || 'Cancel' );
 			$ok.text( opts.confirmText || 'Confirm' ).toggleClass( 'fw-le-confirm__btn--danger', !! opts.danger );
 
-			function close() {
+			function close( cancelled ) {
 				$c.hide();
 				$ok.off( 'click' ); $no.off( 'click' ); $c.off( 'click' );
+				if ( cancelled && opts.onCancel ) { opts.onCancel(); }
 			}
-			$ok.on( 'click', function () { close(); if ( cb ) { cb(); } } );
-			$no.on( 'click', close );
-			$c.on( 'click', function ( e ) { if ( e.target === $c[ 0 ] ) { close(); } } );
+			$ok.on( 'click', function () { close( false ); if ( cb ) { cb(); } } );
+			$no.on( 'click', function () { close( true ); } );
+			$c.on( 'click', function ( e ) { if ( e.target === $c[ 0 ] ) { close( true ); } } );
 
 			$c.css( 'display', 'flex' );
 			$ok.trigger( 'focus' );
@@ -1904,6 +1986,8 @@
 			this.toFrame( 'set-device', { device: this.device || 'desktop' } );
 			this.refreshPasteState();
 			this.refreshSettingsPasteState();
+			// A restore that happened before the frame was ready: render it now.
+			if ( this.pendingRender ) { this.pendingRender = false; this.renderPageToCanvas(); }
 		},
 
 		/** Reflect the canvas selection as a clickable breadcrumb of the item's
@@ -2133,10 +2217,14 @@
 			this.setStatus( 'saving', ( cfg.l10n && cfg.l10n.saving ) || 'Saving…' );
 
 			var self = this;
-			this.ajax( cfg.actions.save, { json: JSON.stringify( this.model ) }, function ( resp ) {
+			var savedJson = JSON.stringify( this.model );
+			this.ajax( cfg.actions.save, { json: savedJson }, function ( resp ) {
 				self.saving = false;
 				if ( resp && resp.success ) {
 					self.dirty = false;
+					// The server cleared the recovery autosave; align our baseline so a
+					// fresh backup only fires after the NEXT change.
+					self.lastAutosaveJson = savedJson;
 					self.log( 'saved' );
 					self.setStatus( 'ready', ( cfg.l10n && cfg.l10n.saved ) || 'Saved' );
 				} else {
