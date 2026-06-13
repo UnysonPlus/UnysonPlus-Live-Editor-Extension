@@ -33,6 +33,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 *  page-builder content). */
 	const AUTOSAVE_META = '_fw_le_autosave';
 
+	/** Revision history: a small index meta (list metadata) + one meta per
+	 *  revision holding the full model JSON; capped at REVISIONS_MAX (oldest
+	 *  trimmed). */
+	const REVISIONS_INDEX_META = '_fw_le_rev_index';
+	const REVISION_META_PREFIX = '_fw_le_rev_';
+	const REVISIONS_MAX        = 20;
+
 	/** Query var that boots the editor shell (the chrome around the iframe). */
 	private $boot_query_var = 'fw-live-editor';
 
@@ -63,6 +70,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
+		add_action( 'wp_ajax_fw_live_editor_revisions', array( $this, '_ajax_revisions' ) );
+		add_action( 'wp_ajax_fw_live_editor_revision_get', array( $this, '_ajax_revision_get' ) );
 
 		// --- Edit-mode render filters. ---
 		// These act inside the iframe (frame request) AND during the single-item
@@ -483,6 +492,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'renderPage'  => 'fw_live_editor_render_page',
 				'save'        => 'fw_live_editor_save',
 				'autosave'    => 'fw_live_editor_autosave',
+				'revisions'    => 'fw_live_editor_revisions',
+				'revisionGet'  => 'fw_live_editor_revision_get',
 			),
 			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
 			'elements' => $this->get_insertable_elements(),
@@ -580,6 +591,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'restore'             => __( 'Restore', 'fw' ),
 				'discard'             => __( 'Discard', 'fw' ),
 				'autoSaved'           => __( 'Auto Saved', 'fw' ),
+				'history'             => __( 'History', 'fw' ),
+				'revisionsTitle'      => __( 'Revision History', 'fw' ),
+				'noRevisions'         => __( 'No saved versions yet. Revisions are created each time you Save.', 'fw' ),
+				'current'             => __( 'Current', 'fw' ),
+				'restoreRevTitle'     => __( 'Restore this version?', 'fw' ),
+				'restoreRevMsg'       => __( 'This replaces the current content with the selected version. You can undo (Ctrl+Z), or Save to keep it.', 'fw' ),
+				'revisionError'       => __( 'Could not load this version.', 'fw' ),
 			),
 		) );
 	}
@@ -1292,7 +1310,102 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// A real save supersedes any recovery autosave.
 		delete_post_meta( $post_id, self::AUTOSAVE_META );
 
+		// Snapshot this save into the revision history.
+		$this->store_revision( $post_id, $json );
+
 		wp_send_json_success( array( 'saved' => true ) );
+	}
+
+	/**
+	 * Append a saved model JSON to the revision history: store it under its own
+	 * meta key and prepend its metadata to the index, trimming (and deleting) the
+	 * oldest beyond REVISIONS_MAX.
+	 *
+	 * @param int    $post_id
+	 * @param string $json
+	 */
+	private function store_revision( $post_id, $json ) {
+		$time = time();
+		$user = wp_get_current_user();
+
+		// wp_slash(): update_post_meta() wp_unslash()es internally; the JSON arrives
+		// already-unslashed, so re-slash or its backslashes are stripped.
+		update_post_meta( $post_id, self::REVISION_META_PREFIX . $time, wp_slash( $json ) );
+
+		$index = get_post_meta( $post_id, self::REVISIONS_INDEX_META, true );
+		if ( ! is_array( $index ) ) {
+			$index = array();
+		}
+
+		array_unshift( $index, array(
+			'time' => $time,
+			'user' => $user ? $user->ID : 0,
+			'name' => $user ? $user->display_name : '',
+		) );
+
+		if ( count( $index ) > self::REVISIONS_MAX ) {
+			foreach ( array_slice( $index, self::REVISIONS_MAX ) as $old ) {
+				if ( ! empty( $old['time'] ) ) {
+					delete_post_meta( $post_id, self::REVISION_META_PREFIX . (int) $old['time'] );
+				}
+			}
+			$index = array_slice( $index, 0, self::REVISIONS_MAX );
+		}
+
+		update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+	}
+
+	/**
+	 * Return the revision list (metadata only — newest first) for the History
+	 * panel. The newest entry is the current saved state.
+	 *
+	 * @internal
+	 */
+	public function _ajax_revisions() {
+		$post_id = $this->verify_ajax();
+
+		$index = get_post_meta( $post_id, self::REVISIONS_INDEX_META, true );
+		$out   = array();
+
+		if ( is_array( $index ) ) {
+			$first = true;
+			foreach ( $index as $rev ) {
+				if ( empty( $rev['time'] ) ) {
+					continue;
+				}
+				$out[] = array(
+					'id'       => (int) $rev['time'],
+					'name'     => isset( $rev['name'] ) && $rev['name'] !== '' ? (string) $rev['name'] : __( 'Unknown', 'fw' ),
+					'timeText' => sprintf(
+						/* translators: %s: human-readable time difference, e.g. "5 mins" */
+						__( '%s ago', 'fw' ),
+						human_time_diff( (int) $rev['time'] )
+					),
+					'current'  => $first,
+				);
+				$first = false;
+			}
+		}
+
+		wp_send_json_success( array( 'revisions' => $out ) );
+	}
+
+	/**
+	 * Return one revision's full model JSON (by its `id` = timestamp).
+	 *
+	 * @internal
+	 */
+	public function _ajax_revision_get() {
+		$post_id = $this->verify_ajax();
+
+		$id   = (int) FW_Request::POST( 'id' );
+		$json = $id ? get_post_meta( $post_id, self::REVISION_META_PREFIX . $id, true ) : '';
+
+		if ( ! is_string( $json ) || $json === '' || json_decode( $json, true ) === null ) {
+			wp_send_json_error( array( 'message' => __( 'Revision not found.', 'fw' ) ) );
+		}
+
+		wp_send_json_success( array( 'json' => $json ) );
 	}
 
 	/**

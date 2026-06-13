@@ -486,7 +486,10 @@
 					'<span class="dashicons dashicons-plus-alt2"></span> ' + ( ( cfg.l10n && cfg.l10n.add ) || 'Add' ) +
 				'</button>'
 			).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
-			this.$.addBtn.on( 'click', function () { $( 'body' ).toggleClass( 'fw-le-panel-open' ); } );
+			this.$.addBtn.on( 'click', function () {
+				var open = ! $( 'body' ).hasClass( 'fw-le-panel-open' );
+				$( 'body' ).removeClass( 'fw-le-nav-open fw-le-tpl-open fw-le-history-open' ).toggleClass( 'fw-le-panel-open', open );
+			} );
 			// Section structure picker stays available — reached from the in-canvas
 			// "+ Add Section" zone (and the blank-page empty state), so no redundant
 			// toolbar button competing with the "Sections" navigator below.
@@ -501,7 +504,7 @@
 			).insertAfter( this.$.addBtn );
 			this.$.navBtn.on( 'click', function () {
 				var open = ! $( 'body' ).hasClass( 'fw-le-nav-open' );
-				$( 'body' ).removeClass( 'fw-le-panel-open fw-le-tpl-open' ).toggleClass( 'fw-le-nav-open', open );
+				$( 'body' ).removeClass( 'fw-le-panel-open fw-le-tpl-open fw-le-history-open' ).toggleClass( 'fw-le-nav-open', open );
 				if ( open ) { self.refreshNavigator(); }
 			} );
 			this.buildNavigator();
@@ -517,11 +520,24 @@
 				).insertAfter( this.$.navBtn );
 				this.$.tplBtn.on( 'click', function () {
 					var open = ! $( 'body' ).hasClass( 'fw-le-tpl-open' );
-					$( 'body' ).removeClass( 'fw-le-panel-open fw-le-nav-open' ).toggleClass( 'fw-le-tpl-open', open );
+					$( 'body' ).removeClass( 'fw-le-panel-open fw-le-nav-open fw-le-history-open' ).toggleClass( 'fw-le-tpl-open', open );
 					if ( open ) { self.refreshTemplates(); }
 				} );
 				this.buildTemplatesPanel();
 			}
+
+			// "History" — browse + restore previous saved versions of this page.
+			this.$.histBtn = $(
+				'<button type="button" id="fw-le-hist-btn" class="fw-le-btn fw-le-btn--ghost">' +
+					'<span class="dashicons dashicons-backup"></span> ' + ( ( cfg.l10n && cfg.l10n.history ) || 'History' ) +
+				'</button>'
+			).insertAfter( this.$.tplBtn || this.$.navBtn );
+			this.$.histBtn.on( 'click', function () {
+				var open = ! $( 'body' ).hasClass( 'fw-le-history-open' );
+				$( 'body' ).removeClass( 'fw-le-panel-open fw-le-nav-open fw-le-tpl-open' ).toggleClass( 'fw-le-history-open', open );
+				if ( open ) { self.refreshHistory(); }
+			} );
+			this.buildHistoryPanel();
 
 			var $panel = $(
 				'<aside id="fw-le-panel">' +
@@ -1055,6 +1071,93 @@
 
 			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-tpl-open' ); } );
 			this.bindTemplatesPanel();
+		},
+
+		/* ---- revision history ------------------------------------------ */
+
+		buildHistoryPanel: function () {
+			var self = this;
+			var l = cfg.l10n || {};
+			var $panel = this.$.history = $(
+				'<aside id="fw-le-history">' +
+					'<div class="fw-le-panel__head"><strong>' + ( l.revisionsTitle || 'Revision History' ) + '</strong>' +
+						'<button type="button" class="fw-le-panel__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-history__body"></div>' +
+				'</aside>'
+			).appendTo( '#fw-live-editor-app' );
+
+			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-history-open' ); } );
+
+			// Restore a revision (delegated, bound once).
+			$panel.on( 'click', '.fw-le-history__restore', function ( e ) {
+				e.preventDefault();
+				self.restoreRevision( $( this ).closest( '.fw-le-history__item' ).attr( 'data-id' ) );
+			} );
+		},
+
+		/** (Re)load the revision list into the History panel. */
+		refreshHistory: function () {
+			var self = this;
+			var l = cfg.l10n || {};
+			var $body = this.$.history.find( '.fw-le-history__body' );
+			$body.html( '<div class="fw-le-history__loading">' + ( l.loading || 'Loading…' ) + '</div>' );
+			this.ajax( cfg.actions.revisions, {}, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.revisions ) ) {
+					$body.html( '<div class="fw-le-history__error">' + ( l.revisionError || 'Could not load history.' ) + '</div>' );
+					return;
+				}
+				var revs = resp.data.revisions;
+				if ( ! revs.length ) {
+					$body.html( '<div class="fw-le-history__empty">' + ( l.noRevisions || 'No saved versions yet.' ) + '</div>' );
+					return;
+				}
+				$body.empty();
+				revs.forEach( function ( r ) {
+					var $row = $(
+						'<div class="fw-le-history__item">' +
+							'<span class="fw-le-history__dot"></span>' +
+							'<span class="fw-le-history__meta"><span class="fw-le-history__when"></span><span class="fw-le-history__who"></span></span>' +
+							( r.current
+								? '<span class="fw-le-history__badge">' + ( l.current || 'Current' ) + '</span>'
+								: '<button type="button" class="fw-le-history__restore">' + ( l.restore || 'Restore' ) + '</button>' ) +
+						'</div>'
+					).attr( 'data-id', r.id );
+					if ( r.current ) { $row.addClass( 'is-current' ); }
+					$row.find( '.fw-le-history__when' ).text( r.timeText || '' );
+					$row.find( '.fw-le-history__who' ).text( r.name || '' );
+					$body.append( $row );
+				} );
+			} );
+		},
+
+		/** Restore a past saved version into the editor (recorded on the undo stack;
+		 *  Save to keep it). */
+		restoreRevision: function ( id ) {
+			if ( ! id ) { return; }
+			var self = this;
+			var l = cfg.l10n || {};
+			this.ajax( cfg.actions.revisionGet, { id: id }, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && typeof resp.data.json === 'string' ) ) {
+					window.alert( l.revisionError || 'Could not load this version.' );
+					return;
+				}
+				var parsed;
+				try { parsed = JSON.parse( resp.data.json ); } catch ( e ) { window.alert( l.revisionError || 'Could not load this version.' ); return; }
+				if ( ! Array.isArray( parsed ) ) { return; }
+				self.confirm( {
+					title:       l.restoreRevTitle || 'Restore this version?',
+					message:     l.restoreRevMsg || 'This replaces the current content with the selected version. You can undo (Ctrl+Z), or Save to keep it.',
+					confirmText: l.restore || 'Restore'
+				}, function () {
+					self.recordHistory();          // so Ctrl+Z reverts the restore
+					self.model = parsed;
+					self.rebuildIndex();
+					self.markDirty();
+					self.refreshNavigator();
+					if ( self.frameReady ) { self.renderPageToCanvas(); } else { self.pendingRender = true; }
+					$( 'body' ).removeClass( 'fw-le-history-open' );
+				} );
+			} );
 		},
 
 		/** POST to admin-ajax for a builder-templates action. These handlers use
@@ -2227,6 +2330,8 @@
 					self.lastAutosaveJson = savedJson;
 					self.log( 'saved' );
 					self.setStatus( 'ready', ( cfg.l10n && cfg.l10n.saved ) || 'Saved' );
+					// A save adds a revision — refresh the History panel if it's open.
+					if ( $( 'body' ).hasClass( 'fw-le-history-open' ) ) { self.refreshHistory(); }
 				} else {
 					window.console && console.error( '[fw-le-shell] save failed', resp );
 					self.$.save.prop( 'disabled', false );
