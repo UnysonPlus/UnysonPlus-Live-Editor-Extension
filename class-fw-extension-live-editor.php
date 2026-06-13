@@ -43,6 +43,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// and on the wp-admin post-edit screen, so it is registered unconditionally.
 		add_action( 'admin_bar_menu', array( $this, '_action_admin_bar_menu' ), 90 );
 
+		// Entry points into the live editor from wp-admin: a button in the Publish
+		// box on the post-edit screen, and a hover row-action in the Pages/Posts
+		// list table (like "Edit with Elementor").
+		add_action( 'post_submitbox_misc_actions', array( $this, '_action_submitbox_edit_live' ) );
+		add_filter( 'page_row_actions', array( $this, '_filter_row_actions' ), 10, 2 );
+		add_filter( 'post_row_actions', array( $this, '_filter_row_actions' ), 10, 2 );
+
 		// --- AJAX (admin-ajax.php runs in is_admin() context). ---
 		add_action( 'wp_ajax_fw_live_editor_item_options', array( $this, '_ajax_item_options' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_item', array( $this, '_ajax_render_item' ) );
@@ -281,6 +288,63 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		return $post;
 	}
 
+	/**
+	 * Is this a builder post the current user may open in the live editor? Shared
+	 * gate for the Publish-box button + the list-table row action.
+	 *
+	 * @param WP_Post|int $post
+	 *
+	 * @return bool
+	 */
+	private function can_edit_live( $post ) {
+		$post = get_post( $post );
+
+		return $post instanceof WP_Post
+			&& 'auto-draft' !== $post->post_status
+			&& 'trash' !== $post->post_status
+			&& current_user_can( 'edit_post', $post->ID )
+			&& $this->pb()
+			&& $this->pb()->is_builder_post( $post->ID );
+	}
+
+	/**
+	 * "Edit on Live Editor" button in the Publish/Update meta box.
+	 *
+	 * @internal
+	 */
+	public function _action_submitbox_edit_live() {
+		$post = get_post();
+
+		if ( ! $this->can_edit_live( $post ) ) {
+			return;
+		}
+
+		echo '<div class="misc-pub-section" style="text-align:center;">'
+			. '<a href="' . esc_url( $this->get_boot_url( $post ) ) . '" class="button button-secondary" style="width:100%;box-sizing:border-box;">'
+			. '<span class="dashicons dashicons-edit" style="vertical-align:text-top;"></span> '
+			. esc_html__( 'Edit on Live Editor', 'fw' )
+			. '</a></div>';
+	}
+
+	/**
+	 * "Edit with Unyson+ Live Editor" hover action in the Pages/Posts list table.
+	 *
+	 * @param string[] $actions
+	 * @param WP_Post   $post
+	 *
+	 * @return string[]
+	 * @internal
+	 */
+	public function _filter_row_actions( $actions, $post ) {
+		if ( $this->can_edit_live( $post ) ) {
+			$actions['fw_live_editor'] = '<a href="' . esc_url( $this->get_boot_url( $post ) ) . '">'
+				. esc_html__( 'Edit with Unyson+ Live Editor', 'fw' )
+				. '</a>';
+		}
+
+		return $actions;
+	}
+
 	/* ---------------------------------------------------------------------
 	 * URLs
 	 * ------------------------------------------------------------------- */
@@ -402,6 +466,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'postId'   => (int) $post->ID,
 			'frameUrl' => $this->get_frame_url( $post ),
 			'exitUrl'  => get_permalink( $post->ID ),
+			'editUrl'  => admin_url( 'post.php?post=' . (int) $post->ID . '&action=edit' ),
 			'ajaxUrl'  => admin_url( 'admin-ajax.php' ),
 			'nonce'    => wp_create_nonce( 'fw-live-editor:' . $post->ID ),
 			'actions'  => array(
@@ -1211,4 +1276,5 @@ class FW_Extension_Live_Editor extends FW_Extension {
 
 		wp_send_json_success( array( 'saved' => true ) );
 	}
+
 }

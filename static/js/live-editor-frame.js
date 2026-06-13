@@ -1372,16 +1372,36 @@
 			// Relay undo/redo keys to the shell — but not while inline-editing text,
 			// where Ctrl+Z should do the browser's native text undo.
 			document.addEventListener( 'keydown', function ( e ) {
-				if ( self.editing ) { return; }
+				if ( self.editing ) { return; } // inline text editing keeps native keys
+				var key = e.key || '';
+				var t = e.target, tag = t && t.tagName;
+				var inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable );
+
+				// Esc — close the action menu, else deselect.
+				if ( key === 'Escape' ) {
+					if ( self.els.ctxmenu ) { self.closeContextMenu(); }
+					else if ( self.activeId ) { self.clearSelection(); }
+					return;
+				}
+				// Delete / Backspace — remove the selected item (not while in a field).
+				if ( ( key === 'Delete' || key === 'Backspace' ) && self.activeId && ! inField ) {
+					e.preventDefault();
+					var label = ( self.index[ self.activeId ] && self.index[ self.activeId ].label ) || 'item';
+					self.toShell( 'delete-request', { id: self.activeId, label: label } );
+					return;
+				}
+
 				if ( ! ( e.ctrlKey || e.metaKey ) ) { return; }
-				var k = ( e.key || '' ).toLowerCase();
-				if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); self.toShell( 'undo', {} ); }
+				var k = key.toLowerCase();
+				if ( k === 's' ) { e.preventDefault(); self.toShell( 'save-request', {} ); }
+				else if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); self.toShell( 'undo', {} ); }
 				else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); self.toShell( 'redo', {} ); }
 				// Copy the selected item — but don't hijack a real text selection.
 				else if ( k === 'c' && self.activeId && ! ( window.getSelection && String( window.getSelection() ) ) ) {
 					e.preventDefault(); self.toShell( 'copy-request', { id: self.activeId } );
 				}
 				else if ( k === 'v' ) { e.preventDefault(); self.toShell( 'paste-request', { id: self.activeId || null } ); }
+				else if ( k === 'd' && self.activeId ) { e.preventDefault(); self.toShell( 'duplicate-request', { id: self.activeId } ); }
 			}, false );
 			// Drag-to-add uses the shell's pointer-capture relay (add-dragover /
 			// add-drop messages → pointerAddOver / pointerAddDrop), not native DnD,
@@ -1445,10 +1465,10 @@
 
 			var items = [
 				{ text: 'Edit',          act: function () { self.toShell( 'edit-request', { id: id } ); } },
-				{ text: 'Duplicate',     act: function () { self.toShell( 'duplicate-request', { id: id } ); } },
+				{ text: 'Duplicate', key: 'Ctrl+D', act: function () { self.toShell( 'duplicate-request', { id: id } ); } },
 				{ sep: true },
-				{ text: 'Copy',          act: function () { self.toShell( 'copy-request', { id: id } ); } },
-				{ text: 'Paste',         disabled: ! this.hasClipboard, act: function () { self.toShell( 'paste-request', { id: id } ); } },
+				{ text: 'Copy', key: 'Ctrl+C', act: function () { self.toShell( 'copy-request', { id: id } ); } },
+				{ text: 'Paste', key: 'Ctrl+V', disabled: ! this.hasClipboard, act: function () { self.toShell( 'paste-request', { id: id } ); } },
 				{ text: 'Copy Settings', act: function () { self.toShell( 'copy-settings-request', { id: id } ); } },
 				{ text: 'Paste Settings', disabled: ! this.hasSettingsClipboard, act: function () { self.toShell( 'paste-settings-request', { id: id } ); } },
 				{ sep: true },
@@ -1458,7 +1478,7 @@
 				items.push( { text: 'Save as Template', act: function () { self.toShell( 'save-template-request', { id: id } ); } } );
 			}
 			items.push( { sep: true } );
-			items.push( { text: 'Delete', danger: true, act: function () { self.toShell( 'delete-request', { id: id, label: label } ); } } );
+			items.push( { text: 'Delete', key: 'Del', danger: true, act: function () { self.toShell( 'delete-request', { id: id, label: label } ); } } );
 
 			var menu = document.createElement( 'div' );
 			menu.className = 'fw-le-ctxmenu';
@@ -1472,7 +1492,13 @@
 				var b = document.createElement( 'button' );
 				b.type = 'button';
 				b.className = 'fw-le-ctxmenu__item' + ( it.disabled ? ' is-disabled' : '' ) + ( it.danger ? ' is-danger' : '' );
-				b.textContent = it.text;
+				b.appendChild( document.createTextNode( it.text ) );
+				if ( it.key ) {
+					var kEl = document.createElement( 'span' );
+					kEl.className = 'fw-le-ctxmenu__key';
+					kEl.textContent = it.key;
+					b.appendChild( kEl );
+				}
 				if ( ! it.disabled ) {
 					b.addEventListener( 'click', function ( e ) {
 						e.preventDefault(); e.stopPropagation();

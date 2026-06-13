@@ -82,8 +82,7 @@ nocache_headers();
 		<header id="fw-le-toolbar" class="fw-le-toolbar">
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--left">
 				<span class="fw-le-brand">
-					<span class="dashicons dashicons-layout"></span>
-					<?php echo esc_html__( 'Live Editor', 'fw' ); ?>
+					<img src="<?php echo esc_url( $fw_le_ext ? $fw_le_ext->get_declared_URI( '/static/img/unysonplus-logo.png' ) : '' ); ?>" alt="UnysonPlus" />
 				</span>
 				<span class="fw-le-doc-title"><?php echo esc_html( get_the_title( $fw_le_post ) ); ?></span>
 			</div>
@@ -111,6 +110,9 @@ nocache_headers();
 				</button>
 				<button type="button" id="fw-le-redo" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Redo (Ctrl+Y)', 'fw' ); ?>" disabled>
 					<span class="dashicons dashicons-redo"></span>
+				</button>
+				<button type="button" id="fw-le-backend" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Edit in the backend builder', 'fw' ); ?>">
+					<span class="dashicons dashicons-admin-page"></span>
 				</button>
 				<button type="button" id="fw-le-preview" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Preview (opens in a new tab)', 'fw' ); ?>">
 					<span class="dashicons dashicons-visibility"></span>

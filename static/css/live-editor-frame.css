@@ -330,7 +330,10 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 }
 
 .fw-le-ctxmenu__item {
-	display: block;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 26px;
 	width: 100%;
 	text-align: left;
 	padding: 7px 11px;
@@ -340,6 +343,13 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	border-radius: 5px;
 	cursor: pointer;
 	font: inherit;
+}
+
+.fw-le-ctxmenu__key {
+	flex: 0 0 auto;
+	font-size: 11px;
+	color: #868b97;
+	letter-spacing: .02em;
 }
 
 .fw-le-ctxmenu__item:hover {

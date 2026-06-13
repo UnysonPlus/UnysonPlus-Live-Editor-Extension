@@ -52,18 +52,17 @@ body.fw-live-editor-shell {
 	justify-content: center;
 }
 
+/* Brand logo (UnysonPlus mark, left-most). */
 .fw-le-brand {
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	font-weight: 600;
-	font-size: 13px;
-	letter-spacing: .2px;
-	color: #fff;
+	justify-content: center;
 }
 
-.fw-le-brand .dashicons {
-	color: #4f8cff;
+.fw-le-brand img {
+	display: block;
+	height: 22px;
+	width: auto;
 }
 
 .fw-le-doc-title {

@@ -229,6 +229,7 @@
 			this.$.undo   = $( '#fw-le-undo' );
 			this.$.redo   = $( '#fw-le-redo' );
 			this.$.preview = $( '#fw-le-preview' );
+			this.$.backend = $( '#fw-le-backend' );
 
 			this.log( 'init', {
 				hasFrame:        this.$.frame.length > 0,
@@ -244,6 +245,7 @@
 			this.$.undo.on( 'click', this.undo.bind( this ) );
 			this.$.redo.on( 'click', this.redo.bind( this ) );
 			this.$.preview.on( 'click', this.onPreview.bind( this ) );
+			this.$.backend.on( 'click', this.onBackend.bind( this ) );
 
 			var self = this;
 			$( '#fw-le-devices' ).on( 'click', '.fw-le-device', function () {
@@ -252,6 +254,9 @@
 			this.buildIndex( this.model, null );
 			this.buildPanel();
 			this.refreshUndoRedo();
+
+			// Brand logo: move it to the far left, before "+ Add" (non-interactive).
+			$( '.fw-le-brand' ).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
 
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
@@ -373,6 +378,9 @@
 					break;
 				case 'paste-settings-request':
 					this.pasteSettings( data.payload && data.payload.id );
+					break;
+				case 'save-request':
+					this.onSave();
 					break;
 				case 'undo':
 					this.undo();
@@ -2101,10 +2109,13 @@
 
 		onKeydown: function ( e ) {
 			if ( ! ( e.ctrlKey || e.metaKey ) ) { return; }
+			var k = ( e.key || '' ).toLowerCase();
+			// Save works everywhere — including inside modal fields — and blocks the
+			// browser's own Save-page dialog.
+			if ( k === 's' ) { e.preventDefault(); this.onSave(); return; }
 			// Let form fields (e.g. the options modal) keep their native undo.
 			var t = e.target, tag = t && t.tagName;
 			if ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) ) { return; }
-			var k = ( e.key || '' ).toLowerCase();
 			if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); this.undo(); }
 			else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); this.redo(); }
 		},
@@ -2140,6 +2151,23 @@
 		 *  unsaved edits, Save first to see them on the page. */
 		onPreview: function () {
 			window.open( cfg.exitUrl || '/', '_blank', 'noopener' );
+		},
+
+		/** Switch to the classic backend builder for this page (warns if unsaved). */
+		onBackend: function () {
+			var url = cfg.editUrl;
+			if ( ! url ) { return; }
+			var go = function () { window.location.href = url; };
+			if ( this.dirty ) {
+				this.confirm( {
+					title:       'Discard unsaved changes?',
+					message:     'You have unsaved edits here. Switching to the backend builder will discard them.',
+					confirmText: 'Switch',
+					danger:      true
+				}, go );
+				return;
+			}
+			go();
 		},
 
 		onExit: function () {
