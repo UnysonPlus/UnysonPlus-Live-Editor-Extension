@@ -538,16 +538,13 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	padding: 0;
 }
 .fw-le-tpl__body ul.std li {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 7px 6px;
+	position: relative;
+	padding: 7px 8px;
 	border-radius: 5px;
 }
 .fw-le-tpl__body ul.std li:hover { background: #2a2c36; }
 .fw-le-tpl__body .template-title {
-	flex: 1 1 auto;
-	min-width: 0;
+	display: block;
 	color: #e7e8ec;
 	text-decoration: none;
 	white-space: nowrap;
@@ -556,17 +553,35 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	cursor: pointer;
 }
 .fw-le-tpl__body .template-title:hover { color: #8fb0ff; }
+
+/* Delete (×) + Export float on the right edge, revealed on row hover, sitting
+ * over the title text (their background masks what's behind). × is rightmost. */
 .fw-le-tpl__body .template-delete,
 .fw-le-tpl__body .template-export {
-	flex: 0 0 auto;
+	position: absolute;
+	top: 50%;
+	transform: translateY( -50% );
 	width: 22px;
 	height: 22px;
 	line-height: 22px;
 	text-align: center;
 	color: #868b97;
+	background: #2a2c36;
 	text-decoration: none;
 	border-radius: 4px;
 	font-size: 15px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity .12s ease;
+}
+.fw-le-tpl__body .template-delete { right: 6px; }
+.fw-le-tpl__body .template-export { right: 32px; }
+/* Predefined templates have no delete button — let Export sit flush right. */
+.fw-le-tpl__body ul.std li:not(:has(.template-delete)) .template-export { right: 6px; }
+.fw-le-tpl__body ul.std li:hover .template-delete,
+.fw-le-tpl__body ul.std li:hover .template-export {
+	opacity: 1;
+	pointer-events: auto;
 }
 .fw-le-tpl__body .template-export:hover { color: #8fb0ff; background: #34363f; }
 .fw-le-tpl__body .template-delete:hover { color: #e0738a; background: #34363f; }
