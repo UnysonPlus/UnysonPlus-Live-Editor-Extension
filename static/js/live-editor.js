@@ -57,6 +57,46 @@
 	// that breakpoint. The eye toggles the key for whichever device is previewed.
 	var DEVICE_HIDE = { desktop: 'hide-md', tablet: 'hide-sm', mobile: 'hide-xs' };
 
+	// Shared copy/paste clipboard (localStorage) — interops with the backend
+	// builder, which reads/writes the same key + shape ({ v, item }).
+	var CLIPBOARD_KEY = 'fw-pb-clipboard';
+	// Separate "copy settings" clipboard: an element's atts minus its content.
+	var SETTINGS_KEY  = 'fw-pb-settings-clipboard';
+	// Option types treated as CONTENT (excluded from "copy settings").
+	var CONTENT_TYPES = { 'text': 1, 'textarea': 1, 'wp-editor': 1, 'wp_editor': 1 };
+
+	/** Walk an options tree (array of {id:def} + nested container .options) and
+	 *  return a flat map of leaf option id → option type. multi-pickers count as a
+	 *  single leaf (their id is a stored value key). */
+	function optionLeafTypes( options ) {
+		var map = {};
+		( function visit( node ) {
+			if ( ! node ) { return; }
+			if ( Object.prototype.toString.call( node ) === '[object Array]' ) {
+				for ( var i = 0; i < node.length; i++ ) { visit( node[ i ] ); }
+				return;
+			}
+			if ( typeof node !== 'object' ) { return; }
+			Object.keys( node ).forEach( function ( id ) {
+				var def = node[ id ];
+				if ( ! def || typeof def !== 'object' ) { return; }
+				var isPicker = def.type === 'multi-picker' || !! def.picker;
+				if ( isPicker ) { map[ id ] = def.type || 'multi-picker'; return; }
+				if ( def.options ) { visit( def.options ); return; } // container
+				map[ id ] = def.type || '';
+			} );
+		} )( options );
+		return map;
+	}
+
+	// Structural level of an item for copy/paste targeting.
+	function kindOf( node ) {
+		if ( ! node ) { return 'element'; }
+		if ( node.type === 'column' ) { return 'column'; }
+		if ( /section$/.test( node.type || '' ) ) { return 'section'; }
+		return 'element';
+	}
+
 	// Twelfths → the page-builder width fraction id (mirrors builder grid.columns).
 	var GRID_ID = {
 		1: '1_12', 2: '1_6', 3: '1_4', 4: '1_3', 5: '5_12', 6: '1_2',
@@ -216,6 +256,14 @@
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
 
+			// The clipboard is shared (localStorage) with the backend builder + other
+			// tabs; refresh the Paste control when it changes elsewhere.
+			var self2 = this;
+			window.addEventListener( 'storage', function ( e ) {
+				if ( e.key === CLIPBOARD_KEY ) { self2.refreshPasteState(); }
+				else if ( e.key === SETTINGS_KEY ) { self2.refreshSettingsPasteState(); }
+			} );
+
 			this.setStatus( 'connecting', ( cfg.l10n && cfg.l10n.connecting ) || 'Connecting…' );
 		},
 
@@ -313,6 +361,18 @@
 					break;
 				case 'toggle-hidden':
 					this.setItemHidden( data.payload );
+					break;
+				case 'copy-request':
+					this.copyItem( data.payload && data.payload.id );
+					break;
+				case 'paste-request':
+					this.pasteItem( data.payload && data.payload.id );
+					break;
+				case 'copy-settings-request':
+					this.copySettings( data.payload && data.payload.id );
+					break;
+				case 'paste-settings-request':
+					this.pasteSettings( data.payload && data.payload.id );
 					break;
 				case 'undo':
 					this.undo();
@@ -1271,6 +1331,232 @@
 			this.syncFrameModel();
 		},
 
+		/* ---- copy / paste ---------------------------------------------- */
+
+		/** Copy an item to the shared clipboard (localStorage), so it can be pasted
+		 *  here, on another page, or in the backend builder (same key + shape). */
+		copyItem: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			try {
+				window.localStorage.setItem( CLIPBOARD_KEY, JSON.stringify( {
+					v: 1,
+					item: JSON.parse( JSON.stringify( node ) )
+				} ) );
+				this.setStatus( 'ready', ( cfg.l10n && cfg.l10n.copied ) || 'Copied' );
+				this.refreshPasteState();
+			} catch ( e ) {
+				window.console && console.error( '[fw-le-shell] copy failed', e );
+			}
+		},
+
+		/** Read the shared clipboard item (or null). */
+		readClipboard: function () {
+			try {
+				var raw = window.localStorage.getItem( CLIPBOARD_KEY );
+				if ( ! raw ) { return null; }
+				var data = JSON.parse( raw );
+				return ( data && data.item && typeof data.item === 'object' ) ? data.item : null;
+			} catch ( e ) { return null; }
+		},
+
+		/** Tell the frame whether the clipboard holds something pasteable. */
+		refreshPasteState: function () {
+			this.toFrame( 'paste-state', { has: !! this.readClipboard() } );
+		},
+
+		/** Resolve where a clipboard item of `kind` should land relative to the
+		 *  current selection. Returns { siblings, index, parentId } or null. */
+		resolvePasteTarget: function ( selectedId, kind ) {
+			var entry = selectedId && this.index[ selectedId ];
+
+			if ( kind === 'section' ) {
+				// Sections live at the page root; drop after the selected section's
+				// top-level ancestor (or at the end).
+				var top = selectedId, guard = 0;
+				while ( top && this.index[ top ] && this.index[ top ].parentId && guard++ < 30 ) {
+					top = this.index[ top ].parentId;
+				}
+				var ti = top ? indexOfId( this.model, top ) : -1;
+				return { siblings: this.model, index: ti >= 0 ? ti + 1 : this.model.length, parentId: null };
+			}
+
+			if ( kind === 'column' ) {
+				var section = this.sectionAncestorOf( selectedId )
+					|| ( this.model.length ? this.model[ this.model.length - 1 ] : null );
+				if ( ! section || ! isContainer( section ) ) { return null; }
+				var cols = columnArrayOf( section );
+				var sectionId = ( section.atts && section.atts.unique_id ) || section.unique_id;
+				var idx = cols.length;
+				if ( entry && entry.node.type === 'column' && cols.indexOf( entry.node ) !== -1 ) {
+					idx = cols.indexOf( entry.node ) + 1;
+				}
+				return { siblings: cols, index: idx, parentId: sectionId };
+			}
+
+			// element
+			var column = this.columnAncestorOf( selectedId );
+			if ( ! column ) { return null; }
+			if ( ! column._items ) { column._items = []; }
+			var columnId = ( column.atts && column.atts.unique_id ) || column.unique_id;
+			var ei = column._items.length;
+			if ( entry && entry.siblings === column._items ) {
+				var p = column._items.indexOf( entry.node );
+				if ( p >= 0 ) { ei = p + 1; }
+			}
+			return { siblings: column._items, index: ei, parentId: columnId };
+		},
+
+		/** Walk up from an id to the enclosing section node (or null). */
+		sectionAncestorOf: function ( id ) {
+			var cur = id, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				var n = this.index[ cur ].node;
+				if ( n && /section$/.test( n.type || '' ) ) { return n; }
+				cur = this.index[ cur ].parentId;
+			}
+			return null;
+		},
+
+		/** Walk up from an id to the enclosing column node (or null). */
+		columnAncestorOf: function ( id ) {
+			var cur = id, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				var n = this.index[ cur ].node;
+				if ( n && n.type === 'column' ) { return n; }
+				cur = this.index[ cur ].parentId;
+			}
+			return null;
+		},
+
+		/** Paste a fresh-id copy of the clipboard item relative to the selection. */
+		pasteItem: function ( selectedId ) {
+			var item = this.readClipboard();
+			if ( ! item ) {
+				window.alert( ( cfg.l10n && cfg.l10n.clipboardEmpty ) || 'Nothing to paste — copy an element first.' );
+				return;
+			}
+			var kind = kindOf( item );
+			var target = this.resolvePasteTarget( selectedId, kind );
+			if ( ! target ) {
+				window.alert( kind === 'element'
+					? ( ( cfg.l10n && cfg.l10n.pasteNeedColumn ) || 'Select a column or element to paste into.' )
+					: ( ( cfg.l10n && cfg.l10n.pasteNeedSection ) || 'Add or select a section first.' ) );
+				return;
+			}
+
+			var self = this;
+			var node = this.cloneWithNewIds( item );
+			var id   = ( node.atts && node.atts.unique_id ) || node.unique_id;
+
+			this.recordHistory();
+			target.siblings.splice( target.index, 0, node );
+			this.rebuildIndex();
+			this.markDirty();
+			this.syncFrameModel();
+			this.refreshNavigator();
+
+			if ( kind === 'section' ) {
+				var prev = target.index > 0 ? target.siblings[ target.index - 1 ] : null;
+				var afterId = prev ? ( ( prev.atts && prev.atts.unique_id ) || prev.unique_id ) : null;
+				this.ajax( cfg.actions.renderItem, { item: JSON.stringify( node ) }, function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+						self.toFrame( 'insert-section', { html: r.data.html, id: id, afterId: afterId } );
+					}
+				} );
+			} else if ( kind === 'column' ) {
+				// Re-render the whole section so the column grid recalculates.
+				var section = this.nodeOf( target.parentId );
+				this.ajax( cfg.actions.renderItem, { item: JSON.stringify( section ) }, function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+						self.toFrame( 'replace', { id: target.parentId, html: r.data.html, selectId: id } );
+					}
+				} );
+			} else {
+				var nextSib = target.siblings[ target.index + 1 ];
+				var beforeId = nextSib ? ( ( nextSib.atts && nextSib.atts.unique_id ) || nextSib.unique_id ) : null;
+				this.ajax( cfg.actions.renderItem, { item: JSON.stringify( node ) }, function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+						self.toFrame( 'insert-element', { html: r.data.html, targetParentId: target.parentId, beforeId: beforeId, id: id } );
+					}
+				} );
+			}
+		},
+
+		/* ---- copy / paste SETTINGS (styling, not content) -------------- */
+
+		readSettingsClipboard: function () {
+			try {
+				var raw = window.localStorage.getItem( SETTINGS_KEY );
+				if ( ! raw ) { return null; }
+				var data = JSON.parse( raw );
+				return ( data && data.settings && typeof data.settings === 'object' ) ? data : null;
+			} catch ( e ) { return null; }
+		},
+
+		refreshSettingsPasteState: function () {
+			this.toFrame( 'settings-paste-state', { has: !! this.readSettingsClipboard() } );
+		},
+
+		/** Copy an element's settings — every att EXCEPT its content (text /
+		 *  textarea / wp-editor values) and unique_id — to the settings clipboard. */
+		copySettings: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			var self = this, tag = tagFor( node );
+			this.fetchOptions( tag, function ( options ) {
+				var types = optionLeafTypes( options );
+				var settings = {};
+				var atts = node.atts || {};
+				Object.keys( atts ).forEach( function ( k ) {
+					if ( k === 'unique_id' ) { return; }
+					if ( CONTENT_TYPES[ types[ k ] ] ) { return; } // skip content fields
+					settings[ k ] = atts[ k ];
+				} );
+				try {
+					window.localStorage.setItem( SETTINGS_KEY, JSON.stringify( {
+						v: 1, tag: tag, settings: JSON.parse( JSON.stringify( settings ) )
+					} ) );
+					self.setStatus( 'ready', ( cfg.l10n && cfg.l10n.settingsCopied ) || 'Settings copied' );
+					self.refreshSettingsPasteState();
+				} catch ( e ) {
+					window.console && console.error( '[fw-le-shell] copy settings failed', e );
+				}
+			} );
+		},
+
+		/** Apply copied settings onto an element — only the option keys it actually
+		 *  has, never content fields — keeping its own text/content. */
+		pasteSettings: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			var clip = this.readSettingsClipboard();
+			if ( ! clip ) {
+				window.alert( ( cfg.l10n && cfg.l10n.noSettings ) || 'No settings copied yet — use "Copy Settings" first.' );
+				return;
+			}
+			var self = this, tag = tagFor( node );
+			this.fetchOptions( tag, function ( options ) {
+				var types = optionLeafTypes( options );
+				self.recordHistory();
+				if ( ! node.atts ) { node.atts = {}; }
+				var applied = 0;
+				Object.keys( clip.settings ).forEach( function ( k ) {
+					if ( ! ( k in types ) ) { return; }          // target doesn't have this option
+					if ( CONTENT_TYPES[ types[ k ] ] ) { return; } // never paste content
+					node.atts[ k ] = clip.settings[ k ];
+					applied++;
+				} );
+				if ( ! applied ) {
+					window.alert( ( cfg.l10n && cfg.l10n.noSettingsApplied ) || 'None of the copied settings apply to this element.' );
+					return;
+				}
+				self.markDirty();
+				self.syncFrameModel();
+				self.renderItem( id );
+			} );
+		},
+
 		/* ---- pointer-capture drag from the panel ----------------------- */
 
 		startPanelDrag: function ( info, e ) {
@@ -1608,6 +1894,8 @@
 			}
 			this.toFrame( 'init', { model: this.model } );
 			this.toFrame( 'set-device', { device: this.device || 'desktop' } );
+			this.refreshPasteState();
+			this.refreshSettingsPasteState();
 		},
 
 		/** Reflect the canvas selection as a clickable breadcrumb of the item's

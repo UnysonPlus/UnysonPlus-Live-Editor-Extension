@@ -60,7 +60,7 @@ nocache_headers();
 	<script>
 	( function () {
 		var orig  = EventTarget.prototype.addEventListener;
-		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1 };
+		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1, contextmenu: 1 };
 		EventTarget.prototype.addEventListener = function ( type, listener, options ) {
 			if ( force[ type ] ) {
 				if ( options && typeof options === 'object' ) {

@@ -786,6 +786,16 @@ body.fw-live-editor-shell .media-modal {
 	 * stacking to a later-opened options modal at the same z-index. */
 }
 
+/* The modal grabs focus when it opens; WordPress's admin focus style then paints a
+ * blue ring around the whole dialog. It's just a focus indicator (the controls
+ * inside have their own), so suppress the modal-level ring — it reads as a stray
+ * border around the popup. */
+body.fw-live-editor-shell .media-modal:focus,
+body.fw-live-editor-shell .media-modal:focus-within {
+	outline: none !important;
+	box-shadow: 0 12px 40px rgba( 0, 0, 0, .45 ) !important;
+}
+
 /* WordPress applies box-sizing:border-box to everything under .wp-admin, and the
  * option/modal layouts are authored for that. The shell body is NOT .wp-admin, so
  * those elements fall back to content-box and their padding adds past the modal

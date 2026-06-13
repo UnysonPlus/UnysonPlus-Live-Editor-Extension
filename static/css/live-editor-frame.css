@@ -307,6 +307,65 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	background: #e2483d;
 }
 
+/* Paste while the shared clipboard is empty. */
+#fw-le-overlay .fw-le-tag__btn--disabled {
+	opacity: .3;
+	pointer-events: none;
+}
+
+/* Right-click action menu (appended to the canvas <body>, fixed-positioned). */
+.fw-le-ctxmenu {
+	position: fixed;
+	z-index: 2147483646;
+	min-width: 184px;
+	padding: 5px;
+	background: #23252e;
+	border: 1px solid #3a3d48;
+	border-radius: 7px;
+	box-shadow: 0 10px 30px rgba( 0, 0, 0, .42 );
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size: 13px;
+	line-height: 1.2;
+	-webkit-font-smoothing: antialiased;
+}
+
+.fw-le-ctxmenu__item {
+	display: block;
+	width: 100%;
+	text-align: left;
+	padding: 7px 11px;
+	border: 0;
+	background: transparent;
+	color: #e7e8ec;
+	border-radius: 5px;
+	cursor: pointer;
+	font: inherit;
+}
+
+.fw-le-ctxmenu__item:hover {
+	background: #313440;
+}
+
+.fw-le-ctxmenu__item.is-disabled {
+	opacity: .38;
+	cursor: default;
+	pointer-events: none;
+}
+
+.fw-le-ctxmenu__item.is-danger {
+	color: #e0738a;
+}
+
+.fw-le-ctxmenu__item.is-danger:hover {
+	background: rgba( 224, 115, 138, .14 );
+}
+
+.fw-le-ctxmenu__sep {
+	height: 1px;
+	margin: 4px 7px;
+	background: #34363f;
+}
+
 /* Hide/Show eye while the item is hidden — accented so the state reads at a glance. */
 #fw-le-overlay .fw-le-tag__btn.is-on {
 	color: #ffd479;

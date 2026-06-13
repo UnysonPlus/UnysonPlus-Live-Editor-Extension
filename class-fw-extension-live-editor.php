@@ -493,6 +493,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'noColumnSelected'    => __( 'Select a column first (click one on the page), then save it as a template.', 'fw' ),
 				'noSectionTarget'     => __( 'Add or select a section first — a column template needs a section to drop into.', 'fw' ),
 				'importFailed'        => __( 'Failed to import template', 'fw' ),
+				'copied'              => __( 'Copied', 'fw' ),
+				'clipboardEmpty'      => __( 'Nothing to paste — copy an element first.', 'fw' ),
+				'pasteNeedColumn'     => __( 'Select a column or element to paste into.', 'fw' ),
+				'pasteNeedSection'    => __( 'Add or select a section first.', 'fw' ),
+				'settingsCopied'      => __( 'Settings copied', 'fw' ),
+				'noSettings'          => __( 'No settings copied yet — use "Copy Settings" first.', 'fw' ),
+				'noSettingsApplied'   => __( 'None of the copied settings apply to this element.', 'fw' ),
 			),
 		) );
 	}

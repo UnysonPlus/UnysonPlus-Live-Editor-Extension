@@ -22,7 +22,7 @@
 	// <head> guard (the iframe is a separate document, so it needs its own).
 	( function () {
 		var orig  = EventTarget.prototype.addEventListener;
-		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1 };
+		var force = { click: 1, dblclick: 1, mousedown: 1, mouseup: 1, submit: 1, keydown: 1, keyup: 1, pointerdown: 1, pointermove: 1, pointerup: 1, pointercancel: 1, contextmenu: 1 };
 		EventTarget.prototype.addEventListener = function ( type, listener, options ) {
 			if ( force[ type ] ) {
 				if ( options && typeof options === 'object' ) {
@@ -239,7 +239,10 @@
 			} else if ( data.type === 'set-device' ) {
 				this.device = ( data.payload && data.payload.device ) || 'desktop';
 				this.refreshHiddenMarks();
-				this.updateTagHiddenState();
+			} else if ( data.type === 'paste-state' ) {
+				this.hasClipboard = !! ( data.payload && data.payload.has );
+			} else if ( data.type === 'settings-paste-state' ) {
+				this.hasSettingsClipboard = !! ( data.payload && data.payload.has );
 			} else if ( data.type === 'reflow' ) {
 				this.reposition();
 			} else if ( data.type === 'select-item' ) {
@@ -1239,7 +1242,10 @@
 				addcol: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="3.5" width="4.5" height="9" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M11 5.5v5M8.5 8h5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
 				tpl:   '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 6h11M6 6v7.5" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
 				eye:   '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" fill="none" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.8" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
-				eyeOff: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5c1.2 0 2.3.4 3.2 1M14.5 8S12 12.5 8 12.5c-1.2 0-2.3-.4-3.2-1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 2.5l11 11" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
+				eyeOff: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5c1.2 0 2.3.4 3.2 1M14.5 8S12 12.5 8 12.5c-1.2 0-2.3-.4-3.2-1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 2.5l11 11" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+				clip:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="4" y="3" width="8" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="6" y="1.6" width="4" height="2.6" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
+				paste: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="3.5" y="3" width="9" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="1.6" width="5" height="2.6" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 8h4M6 10.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
+				menu:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="3" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="13" r="1.4" fill="currentColor"/></svg>'
 			};
 
 			var root = document.createElement( 'div' );
@@ -1253,10 +1259,9 @@
 						'<span class="fw-le-tag__label"></span>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-parent" title="Select parent">' + SVG.up + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-addcol" title="Add column" style="display:none">' + SVG.addcol + '</button>' +
-						'<button type="button" class="fw-le-tag__btn fw-le-act-savetpl" title="Save as Template" style="display:none">' + SVG.tpl + '</button>' +
-						'<button type="button" class="fw-le-tag__btn fw-le-act-hide" title="Hide on the live site">' + SVG.eye + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-duplicate" title="Duplicate">' + SVG.copy + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-edit" title="Edit">' + SVG.edit + '</button>' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-menu" title="More (right-click)">' + SVG.menu + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-tag__btn--danger fw-le-act-delete" title="Delete">' + SVG.trash + '</button>' +
 					'</div>' +
 				'</div>' +
@@ -1271,10 +1276,6 @@
 			this.els.activeBox = root.querySelector( '.fw-le-box--active' );
 			this.els.activeLbl = root.querySelector( '.fw-le-tag__label' );
 			this.els.addColBtn = root.querySelector( '.fw-le-act-addcol' );
-			this.els.saveTplBtn = root.querySelector( '.fw-le-act-savetpl' );
-			this.els.hideBtn   = root.querySelector( '.fw-le-act-hide' );
-			this._svgEye       = SVG.eye;
-			this._svgEyeOff    = SVG.eyeOff;
 			this.els.resize    = root.querySelector( '.fw-le-resize' );
 			this.els.resizeTip = root.querySelector( '.fw-le-resize-tip' );
 			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
@@ -1295,11 +1296,10 @@
 			on( '.fw-le-act-addcol', function () {
 				if ( self.activeId ) { self.toShell( 'add-column', { id: self.activeId } ); }
 			} );
-			on( '.fw-le-act-savetpl', function () {
-				if ( self.activeId ) { self.toShell( 'save-template-request', { id: self.activeId } ); }
-			} );
-			on( '.fw-le-act-hide', function () {
-				if ( self.activeId ) { self.toggleHidden( self.activeId ); }
+			on( '.fw-le-act-menu', function () {
+				if ( ! self.activeId ) { return; }
+				var r = root.querySelector( '.fw-le-act-menu' ).getBoundingClientRect();
+				self.openContextMenu( self.activeId, r.left, r.bottom + 2 );
 			} );
 			on( '.fw-le-act-duplicate', function () {
 				if ( self.activeId ) { self.toShell( 'duplicate-request', { id: self.activeId } ); }
@@ -1341,6 +1341,23 @@
 			// Double-click a text block to edit it inline (cursor at the click point).
 			document.addEventListener( 'dblclick', function ( e ) { self.onDblClick( e ); }, false );
 
+			// Right-click an item → select it + open the full action menu at the cursor.
+			// Use the DOM0 `oncontextmenu` property (returning false) rather than
+			// addEventListener: returning false cancels the native menu reliably even
+			// when a host plugin has forced all addEventListener listeners passive
+			// (which would make e.preventDefault() a no-op and leave the native menu
+			// showing on top). Outside an item we return true so the native menu works.
+			document.oncontextmenu = function ( e ) {
+				e = e || window.event;
+				if ( self.editing ) { return true; }
+				var hit = self.selectableFrom( e.target );
+				if ( ! hit ) { return true; }
+				self.select( hit.el, hit.id );
+				self.openContextMenu( hit.id, e.clientX, e.clientY );
+				if ( e.preventDefault ) { e.preventDefault(); }
+				return false;
+			};
+
 			var reflow = function () {
 				if ( self.rafPending ) { return; }
 				self.rafPending = true;
@@ -1360,6 +1377,11 @@
 				var k = ( e.key || '' ).toLowerCase();
 				if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); self.toShell( 'undo', {} ); }
 				else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); self.toShell( 'redo', {} ); }
+				// Copy the selected item — but don't hijack a real text selection.
+				else if ( k === 'c' && self.activeId && ! ( window.getSelection && String( window.getSelection() ) ) ) {
+					e.preventDefault(); self.toShell( 'copy-request', { id: self.activeId } );
+				}
+				else if ( k === 'v' ) { e.preventDefault(); self.toShell( 'paste-request', { id: self.activeId || null } ); }
 			}, false );
 			// Drag-to-add uses the shell's pointer-capture relay (add-dragover /
 			// add-drop messages → pointerAddOver / pointerAddDrop), not native DnD,
@@ -1400,11 +1422,7 @@
 			// "+ Column" is only meaningful on a section (adds a column to it).
 			var isSection = /section$/.test( meta.type || '' );
 			if ( this.els.addColBtn ) { this.els.addColBtn.style.display = isSection ? '' : 'none'; }
-			// "Save as Template" applies to sections + columns (the granularities that
-			// have a template component on the server).
-			var isColumn = meta.type === 'column';
-			if ( this.els.saveTplBtn ) { this.els.saveTplBtn.style.display = ( isSection || isColumn ) ? '' : 'none'; }
-			this.updateTagHiddenState();
+			this.closeContextMenu();
 			this.toShell( 'select', {
 				id:    id,
 				type:  meta.type,
@@ -1412,24 +1430,93 @@
 			} );
 		},
 
-		/** Sync the hide button's icon + tooltip with the active item's visibility
-		 *  on the PREVIEWED device (the eye reflects the current breakpoint). */
-		updateTagHiddenState: function () {
-			var btn = this.els.hideBtn;
-			if ( ! btn ) { return; }
+		/* ---- right-click context menu ---------------------------------- */
+
+		/** Open the full action menu for an item at viewport coords (clamped). */
+		openContextMenu: function ( id, x, y ) {
+			this.closeContextMenu();
+			var self = this;
+			var meta = this.index[ id ] || {};
+			var isSection = /section$/.test( meta.type || '' );
+			var isColumn  = meta.type === 'column';
+			var hidden    = hiddenOnDevice( meta, this.device );
+			var dev       = DEVICE_LABEL[ this.device ] || 'device';
+			var label     = meta.label || 'item';
+
+			var items = [
+				{ text: 'Edit',          act: function () { self.toShell( 'edit-request', { id: id } ); } },
+				{ text: 'Duplicate',     act: function () { self.toShell( 'duplicate-request', { id: id } ); } },
+				{ sep: true },
+				{ text: 'Copy',          act: function () { self.toShell( 'copy-request', { id: id } ); } },
+				{ text: 'Paste',         disabled: ! this.hasClipboard, act: function () { self.toShell( 'paste-request', { id: id } ); } },
+				{ text: 'Copy Settings', act: function () { self.toShell( 'copy-settings-request', { id: id } ); } },
+				{ text: 'Paste Settings', disabled: ! this.hasSettingsClipboard, act: function () { self.toShell( 'paste-settings-request', { id: id } ); } },
+				{ sep: true },
+				{ text: ( hidden ? 'Show on ' + dev : 'Hide on ' + dev ), act: function () { self.toggleHidden( id ); } }
+			];
+			if ( isSection || isColumn ) {
+				items.push( { text: 'Save as Template', act: function () { self.toShell( 'save-template-request', { id: id } ); } } );
+			}
+			items.push( { sep: true } );
+			items.push( { text: 'Delete', danger: true, act: function () { self.toShell( 'delete-request', { id: id, label: label } ); } } );
+
+			var menu = document.createElement( 'div' );
+			menu.className = 'fw-le-ctxmenu';
+			items.forEach( function ( it ) {
+				if ( it.sep ) {
+					var s = document.createElement( 'div' );
+					s.className = 'fw-le-ctxmenu__sep';
+					menu.appendChild( s );
+					return;
+				}
+				var b = document.createElement( 'button' );
+				b.type = 'button';
+				b.className = 'fw-le-ctxmenu__item' + ( it.disabled ? ' is-disabled' : '' ) + ( it.danger ? ' is-danger' : '' );
+				b.textContent = it.text;
+				if ( ! it.disabled ) {
+					b.addEventListener( 'click', function ( e ) {
+						e.preventDefault(); e.stopPropagation();
+						self.closeContextMenu();
+						it.act();
+					} );
+				}
+				menu.appendChild( b );
+			} );
+			document.body.appendChild( menu );
+			this.els.ctxmenu = menu;
+
+			var mw = menu.offsetWidth, mh = menu.offsetHeight;
+			menu.style.left = Math.max( 4, Math.min( x, window.innerWidth - mw - 6 ) ) + 'px';
+			menu.style.top  = Math.max( 4, Math.min( y, window.innerHeight - mh - 6 ) ) + 'px';
+
+			// Defer the close-on-outside binding so this very click doesn't close it.
+			window.setTimeout( function () {
+				self._ctxOutside = function ( ev ) {
+					if ( ! ( ev.target.closest && ev.target.closest( '.fw-le-ctxmenu' ) ) ) { self.closeContextMenu(); }
+				};
+				self._ctxKey = function ( ev ) { if ( ev.key === 'Escape' ) { self.closeContextMenu(); } };
+				document.addEventListener( 'mousedown', self._ctxOutside, true );
+				document.addEventListener( 'keydown', self._ctxKey, true );
+				window.addEventListener( 'scroll', self._ctxScroll = function () { self.closeContextMenu(); }, true );
+			}, 0 );
+		},
+
+		closeContextMenu: function () {
+			if ( this.els.ctxmenu ) { this.els.ctxmenu.remove(); this.els.ctxmenu = null; }
+			if ( this._ctxOutside ) { document.removeEventListener( 'mousedown', this._ctxOutside, true ); this._ctxOutside = null; }
+			if ( this._ctxKey ) { document.removeEventListener( 'keydown', this._ctxKey, true ); this._ctxKey = null; }
+			if ( this._ctxScroll ) { window.removeEventListener( 'scroll', this._ctxScroll, true ); this._ctxScroll = null; }
+		},
+
+		/** Is the active item hidden on the previewed device? (for the menu label) */
+		isActiveHidden: function () {
 			var meta = this.activeId ? this.index[ this.activeId ] : null;
-			var hidden = hiddenOnDevice( meta, this.device );
-			var dev = DEVICE_LABEL[ this.device ] || 'this device';
-			btn.innerHTML = hidden ? this._svgEyeOff : this._svgEye;
-			btn.setAttribute( 'title', hidden
-				? ( 'Hidden on ' + dev + ' — click to show' )
-				: ( 'Hide on ' + dev ) );
-			btn.classList.toggle( 'is-on', hidden );
+			return hiddenOnDevice( meta, this.device );
 		},
 
 		/** Toggle the active item's visibility on the PREVIEWED device. Optimistic:
-		 *  flip the local responsive_hide map + dim + button, then tell the shell to
-		 *  persist it into the model's `responsive_hide` option. */
+		 *  flip the local responsive_hide map + dim, then tell the shell to persist
+		 *  it into the model's `responsive_hide` option. */
 		toggleHidden: function ( id ) {
 			var meta = this.index[ id ];
 			if ( ! meta ) { return; }
@@ -1442,7 +1529,6 @@
 			if ( want ) { rh[ cls ] = true; } else { delete rh[ cls ]; }
 			meta.responsiveHide = rh;
 			this.applyHiddenMark( id );
-			if ( id === this.activeId ) { this.updateTagHiddenState(); }
 			this.toShell( 'toggle-hidden', { id: id, device: this.device, hidden: want } );
 		},
 
