@@ -492,6 +492,15 @@ body.fw-live-editor-frame-active .fw-le-drag-placeholder {
 
 body.fw-live-editor-frame-active .fw-le-drag-placeholder > * { visibility: hidden !important; }
 
+/* Column being hovered as a NEST target (drop a column inside it). A solid
+   inset glow distinguishes "drop INSIDE this column" from the thin vertical
+   drop-line used for sibling column inserts. */
+body.fw-live-editor-frame-active .fw-le-nest-target {
+	outline: 2px solid #4f8cff !important;
+	outline-offset: -2px;
+	box-shadow: inset 0 0 0 9999px rgba( 79, 140, 255, .08 ) !important;
+}
+
 /* While dragging, suppress text selection + show the grabbing cursor everywhere. */
 html.fw-le-drag-active,
 html.fw-le-drag-active * {

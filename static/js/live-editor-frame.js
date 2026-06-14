@@ -331,14 +331,45 @@
 
 			if ( meta.shortcode === 'text_block' ) {
 				this.enterInlineEdit( hit.el, hit.id ); // inline contenteditable
+			} else if ( meta.shortcode === 'special_heading' ) {
+				// Each visible line (overline / title / subtitle) maps to its own att;
+				// edit just the clicked line in place.
+				var part = this.headingPartFrom( e.target, hit.el );
+				if ( part ) { this.enterInlineEdit( part.el, hit.id, part.att, hit.el ); }
 			} else if ( meta.shortcode === 'media_image' ) {
 				this.toShell( 'edit-image', { id: hit.id } ); // open the media picker
 			}
 		},
 
-		enterInlineEdit: function ( el, id ) {
+		// Resolve which Special Heading line a double-click landed on, plus the att it
+		// writes back to. The overline text lives inside the __label span (its line div
+		// also carries marker pseudo-elements we must not capture in innerHTML); the
+		// title and subtitle are edited on their own elements. Falls back to the title
+		// (then the first present line) when the click missed a specific line.
+		headingPartFrom: function ( target, root ) {
+			var node = target;
+			while ( node && node !== root.parentNode ) {
+				if ( node.matches ) {
+					if ( node.matches( '.heading-overline' ) ) {
+						return { el: node.querySelector( '.heading-overline__label' ) || node, att: 'overline' };
+					}
+					if ( node.matches( '.heading-title' ) )    { return { el: node, att: 'title' }; }
+					if ( node.matches( '.heading-subtitle' ) ) { return { el: node, att: 'subtitle' }; }
+				}
+				node = node.parentNode;
+			}
+			var t = root.querySelector( '.heading-title' );
+			if ( t ) { return { el: t, att: 'title' }; }
+			var o = root.querySelector( '.heading-overline__label' );
+			if ( o ) { return { el: o, att: 'overline' }; }
+			var s = root.querySelector( '.heading-subtitle' );
+			if ( s ) { return { el: s, att: 'subtitle' }; }
+			return null;
+		},
+
+		enterInlineEdit: function ( el, id, att, root ) {
 			var self = this;
-			this.editing = { el: el, id: id };
+			this.editing = { el: el, id: id, att: att || 'text', root: root || el };
 
 			this.els.activeBox.style.display = 'none';
 			this.els.hoverBox.style.display = 'none';
@@ -367,8 +398,11 @@
 			ed.el.removeAttribute( 'contenteditable' );
 			ed.el.classList.remove( 'fw-le-editing' );
 
-			this.toShell( 'update-text', { id: ed.id, text: ed.el.innerHTML } );
-			this.select( ed.el, ed.id );
+			// trim(): heading lines are printed with template indentation around the
+			// value, so the contenteditable innerHTML picks up leading/trailing
+			// whitespace we don't want persisted into the att.
+			this.toShell( 'update-text', { id: ed.id, att: ed.att, text: ed.el.innerHTML.trim() } );
+			this.select( ed.root, ed.id );
 		},
 
 		/* ---- column resize (drag the right edge, 12-col grid) ---------- */
@@ -567,7 +601,19 @@
 				}
 			} else if ( d.isColumn ) {
 				var ct = this.columnDropAt( e.clientX, e.clientY, d.el );
-				if ( ct ) { t = { parent: ct.rowEl, before: ct.before }; }
+				if ( ct && ct.nestColEl ) {
+					// Nesting: don't slide the placeholder into the target (there is
+					// no inner row yet — it's synthesized server-side on drop). Just
+					// highlight the target column; the canvas re-renders on drop.
+					d.nestColEl = ct.nestColEl;
+					this.setNestTarget( ct.nestColEl );
+					this.els.dropline.style.display = 'none';
+					t = null;
+				} else if ( ct ) {
+					d.nestColEl = null;
+					this.setNestTarget( null );
+					t = { parent: ct.rowEl, before: ct.before };
+				}
 			} else {
 				t = this.sectionDropAt( e.clientY, d.el );
 			}
@@ -708,6 +754,29 @@
 			if ( ! sectionEl ) { return null; }
 
 			var colUnder = this.nearestColumnEl( under );
+
+			// NEST detection (one level deep): hovering the INTERIOR of another
+			// depth-0 column → offer to drop the dragged column INSIDE it. The
+			// outer left/right band stays a sibling-insert so you can still place
+			// columns side-by-side. Disallowed when:
+			//   - the target is the dragged column or a descendant of it
+			//   - the target is itself already nested (one-level cap)
+			//   - the dragged column already contains child columns (would make
+			//     the target depth-2)
+			if (
+				colUnder
+				&& colUnder !== excludeEl
+				&& ! ( excludeEl && excludeEl.contains( colUnder ) )
+				&& ! this.isColumnNested( colUnder )
+				&& ! ( excludeEl && this.childColumnsOf( excludeEl ).length )
+			) {
+				var cr = colUnder.getBoundingClientRect();
+				var band = Math.min( 44, cr.width * 0.25 );
+				if ( x > cr.left + band && x < cr.right - band ) {
+					return { nestColEl: colUnder, sectionEl: sectionEl };
+				}
+			}
+
 			if ( colUnder && colUnder !== excludeEl ) {
 				var r = colUnder.getBoundingClientRect();
 				var before = ( x < r.left + r.width / 2 ) ? colUnder : this.nextColumnEl( colUnder, excludeEl );
@@ -1029,7 +1098,10 @@
 				var el = cols[ i ];
 				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
 				if ( ! meta || meta.type !== 'column' ) { continue; }
-				if ( this.leafChildrenOf( el, null ).length === 0 ) { el.classList.add( 'fw-le-empty-col' ); }
+				// A column holding nested columns is NOT empty even with no leaves.
+				var hasContent = this.leafChildrenOf( el, null ).length > 0 ||
+					this.childColumnsOf( el ).length > 0;
+				if ( ! hasContent ) { el.classList.add( 'fw-le-empty-col' ); }
 				else { el.classList.remove( 'fw-le-empty-col' ); }
 			}
 		},
@@ -1054,6 +1126,43 @@
 				node = node.parentNode;
 			}
 			return null;
+		},
+
+		/** Is `colEl` itself nested inside another column? (walks ancestors,
+		 *  NOT including colEl). Used to cap authoring at one level deep. */
+		isColumnNested: function ( colEl ) {
+			var node = colEl.parentNode;
+			while ( node && node !== document.body ) {
+				if ( node.nodeType === 1 && node.hasAttribute && node.hasAttribute( 'data-fw-item-id' ) ) {
+					var meta = this.index[ node.getAttribute( 'data-fw-item-id' ) ];
+					if ( meta && meta.type === 'column' ) { return true; }
+				}
+				node = node.parentNode;
+			}
+			return false;
+		},
+
+		/** Direct-ish child columns of `colEl` (any column whose nearest column
+		 *  ancestor is colEl). */
+		childColumnsOf: function ( colEl ) {
+			var all = colEl.querySelectorAll( '[data-fw-item-id]' ), out = [];
+			for ( var i = 0; i < all.length; i++ ) {
+				var el = all[ i ];
+				if ( el === colEl ) { continue; }
+				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
+				if ( ! meta || meta.type !== 'column' ) { continue; }
+				if ( this.nearestColumnEl( el.parentNode ) === colEl ) { out.push( el ); }
+			}
+			return out;
+		},
+
+		/** Highlight a column as the pending nest target (or clear all). */
+		setNestTarget: function ( colEl ) {
+			var prev = document.querySelectorAll( '.fw-le-nest-target' );
+			for ( var i = 0; i < prev.length; i++ ) {
+				if ( prev[ i ] !== colEl ) { prev[ i ].classList.remove( 'fw-le-nest-target' ); }
+			}
+			if ( colEl ) { colEl.classList.add( 'fw-le-nest-target' ); }
 		},
 
 		/** Leaf elements whose nearest column ancestor is `colEl` (excludes one). */
@@ -1123,6 +1232,7 @@
 			this.drag = null;
 
 			this.els.dropline.style.display = 'none';
+			this.setNestTarget( null );
 			document.documentElement.classList.remove( 'fw-le-drag-active' );
 
 			if ( ! d.started ) { return; } // it was a click, not a drag
@@ -1144,8 +1254,16 @@
 				targetParentId = col ? col.getAttribute( 'data-fw-item-id' ) : null;
 			} else if ( d.isColumn ) {
 				kind = 'column';
-				var sec = this.nearestSectionEl( d.el );
-				targetParentId = sec ? sec.getAttribute( 'data-fw-item-id' ) : null;
+				if ( d.nestColEl ) {
+					// Nesting a column INTO another column. Target parent = that
+					// column; the inner row is synthesized server-side, so the shell
+					// re-renders the canvas after the model move (see move-item
+					// handler). beforeId stays null (append into the parent column).
+					targetParentId = d.nestColEl.getAttribute( 'data-fw-item-id' );
+				} else {
+					var sec = this.nearestSectionEl( d.el );
+					targetParentId = sec ? sec.getAttribute( 'data-fw-item-id' ) : null;
+				}
 			} else {
 				kind = 'section';
 				targetParentId = null; // sections are top-level
@@ -1155,13 +1273,27 @@
 				this.select( d.el, d.id ); // dropped nowhere valid — leave as-is
 				return;
 			}
-			beforeId = this.nextItemId( d.el, kind );
+			// When nesting, beforeId is meaningless (the inner row doesn't exist in
+			// the current DOM yet) — append into the parent column.
+			beforeId = d.nestColEl ? null : this.nextItemId( d.el, kind );
 
 			this.markEmptyColumns();
 			this.ensureSectionAddColZones();
 			this.ensureAddSectionZone();
 			this.select( d.el, d.id );
-			this.toShell( 'move-item', { id: d.id, targetParentId: targetParentId, beforeId: beforeId } );
+
+			if ( window.fwNestedColDebug !== false && window.console ) {
+				console.debug( '[nested-col][live] move-item id=' + d.id +
+					' targetParent=' + targetParentId + ' beforeId=' + beforeId +
+					' nested=' + ( !! d.nestColEl ) );
+			}
+
+			this.toShell( 'move-item', {
+				id: d.id,
+				targetParentId: targetParentId,
+				beforeId: beforeId,
+				nested: !! d.nestColEl
+			} );
 		},
 
 		/** Swap a re-rendered item's HTML into the canvas, keeping it selected. */

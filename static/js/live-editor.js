@@ -1877,9 +1877,12 @@
 			var node = this.nodeOf( payload.id );
 			if ( ! node ) { return; }
 			if ( ! node.atts ) { node.atts = {}; }
-			if ( node.atts.text === payload.text ) { return; } // no change
+			// Which att the inline edit targets — 'text' for the text-block, or the
+			// specific Special Heading line ('overline' / 'title' / 'subtitle').
+			var key = payload.att || 'text';
+			if ( node.atts[ key ] === payload.text ) { return; } // no change
 			this.recordHistory();
-			node.atts.text = payload.text;
+			node.atts[ key ] = payload.text;
 			this.markDirty();
 		},
 
@@ -2044,11 +2047,23 @@
 				if ( node.type === 'column' && /section$/.test( targetParent.node.type || '' ) ) {
 					targetSiblings = columnArrayOf( targetParent.node );
 				} else {
+					// Column-into-column (nesting) and element-into-column both land
+					// in the parent's _items. The items-corrector synthesizes the
+					// inner row for nested columns when the canvas re-renders below.
 					if ( ! targetParent.node._items ) { targetParent.node._items = []; }
 					targetSiblings = targetParent.node._items;
 				}
 			} else {
 				targetSiblings = this.model;
+			}
+
+			var isNestColumn = !! ( payload.nested ||
+				( node.type === 'column' && targetParent && targetParent.node && targetParent.node.type === 'column' ) );
+
+			if ( window.fwNestedColDebug !== false && window.console ) {
+				console.debug( '[nested-col][live] shell.moveItem id=' + payload.id +
+					' type=' + node.type + ' -> parent=' +
+					( targetParent ? targetParent.node.type : 'root' ) + ' nestColumn=' + isNestColumn );
 			}
 
 			var sameContainer = ( targetSiblings === oldSiblings );
@@ -2074,7 +2089,16 @@
 
 			this.rebuildIndex();
 			this.markDirty();
-			this.syncFrameModel();
+
+			// Nesting a column into a column needs the inner row that only the
+			// items-corrector produces (server-side). The frame couldn't pre-place
+			// the DOM into a not-yet-existing row, so re-render the whole canvas from
+			// the corrected model instead of the usual in-place DOM move.
+			if ( isNestColumn ) {
+				this.renderPageToCanvas();
+			} else {
+				this.syncFrameModel();
+			}
 		},
 
 		onFrameReady: function () {
