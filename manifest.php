@@ -8,12 +8,12 @@ $manifest['name']        = __( 'Live Page Editor', 'fw' );
 $manifest['slug']        = 'unysonplus-live-editor';
 $manifest['description'] = __(
 	'Edit page-builder pages directly on the live front-end. Hover sections, columns and '
-	. 'elements to select them and edit their options in place — an Avada-style visual builder '
+	. 'elements to select them and edit their options in place — a real-time visual builder '
 	. 'layered on top of the existing Page Builder. Reached via the "Edit Live" admin-bar button.',
 	'fw'
 );
 
-$manifest['version']    = '0.1.99';
+$manifest['version']    = '0.2.5';
 $manifest['display']    = true;
 $manifest['standalone'] = true;
 

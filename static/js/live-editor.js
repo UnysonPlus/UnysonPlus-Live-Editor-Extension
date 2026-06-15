@@ -20,6 +20,14 @@
 	var DEBUG = true;
 	var HISTORY_MAX = 60;
 
+	// Early error capture for the diagnostics HUD (a conflicting plugin's exception
+	// in the shell would otherwise only show in the console).
+	var SHELL_ERRORS = [];
+	window.addEventListener( 'error', function ( e ) {
+		SHELL_ERRORS.push( ( e.message || 'error' ) + ' @ ' + ( e.filename || '?' ).replace( /^.*\//, '' ) + ':' + ( e.lineno || 0 ) );
+		if ( SHELL_ERRORS.length > 25 ) { SHELL_ERRORS.shift(); }
+	}, true );
+
 	var LEAF_LABELS = {
 		text_block:      'Text',
 		special_heading: 'Heading',
@@ -206,6 +214,7 @@
 
 		index: {},
 		frameReady: false,
+		frameDiag: null,
 		dirty: false,
 		modal: null,
 		renderTimers: {},
@@ -260,6 +269,7 @@
 
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
+			this.setupDebug();
 
 			// The clipboard is shared (localStorage) with the backend builder + other
 			// tabs; refresh the Paste control when it changes elsewhere.
@@ -401,11 +411,15 @@
 				return;
 			}
 
-			this.log( 'recv', data.type, 'origin:', ev.origin );
+			if ( data.type !== 'diag' ) { this.log( 'recv', data.type, 'origin:', ev.origin ); } // diag: high-frequency poll
 
 			switch ( data.type ) {
 				case 'frame-ready':
 					this.onFrameReady();
+					break;
+				case 'diag':
+					this.frameDiag = data.payload;
+					this.renderDebug();
 					break;
 				case 'select':
 					this.onSelect( data.payload );
@@ -2404,6 +2418,249 @@
 
 		setStatus: function ( state, text ) {
 			this.$.status.attr( 'data-state', state ).text( text );
+		},
+
+		/* ---- diagnostics HUD ------------------------------------------- */
+
+		// Open with Ctrl+Alt+D (or auto-open via ?fw-le-debug on the boot URL). Polls
+		// the canvas for its diagnostics and renders a copyable report — built for
+		// triaging "can't select anything on a live site" (cache/optimizer stripping
+		// the edit-render stamps, an id mismatch, or pointer-event interception).
+		setupDebug: function () {
+			var self = this;
+			$( document ).on( 'keydown', function ( e ) {
+				if ( ( e.ctrlKey || e.metaKey ) && e.altKey && ( e.key === 'd' || e.key === 'D' ) ) {
+					e.preventDefault();
+					self.toggleDebug();
+				}
+			} );
+			if ( cfg.debug || /[?&]fw-le-debug\b/.test( window.location.search ) ) {
+				this.toggleDebug( true );
+			}
+		},
+
+		toggleDebug: function ( forceOpen ) {
+			if ( ! this.$.debug ) { this.buildDebugHud(); }
+			var open = forceOpen === true ? true : ( this.$.debug.css( 'display' ) === 'none' );
+			this.$.debug.css( 'display', open ? 'flex' : 'none' );
+			if ( open ) {
+				this.refreshDebug();
+				if ( ! this.debugTimer ) { this.debugTimer = window.setInterval( this.refreshDebug.bind( this ), 1000 ); }
+			} else if ( this.debugTimer ) {
+				window.clearInterval( this.debugTimer );
+				this.debugTimer = null;
+			}
+		},
+
+		buildDebugHud: function () {
+			var self = this;
+			this.$.debug = $(
+				'<div class="fw-le-debug" style="position:fixed;z-index:2147483647;right:12px;bottom:12px;width:460px;max-height:72vh;' +
+					'display:flex;flex-direction:column;background:#111a30;color:#f4f8ff;border:1px solid #3a4f86;border-radius:8px;' +
+					'box-shadow:0 12px 40px rgba(0,0,0,.55);font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;">' +
+					'<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #3a4f86;">' +
+						'<strong style="flex:1;color:#fff;">Live Editor diagnostics</strong>' +
+						'<button type="button" class="fw-le-debug__test" style="cursor:pointer;background:#1f5a3a;color:#fff;border:1px solid #2f8a5a;border-radius:5px;padding:3px 8px;">Test render</button>' +
+						'<button type="button" class="fw-le-debug__copy" style="cursor:pointer;background:#2a3f73;color:#fff;border:1px solid #4a66a8;border-radius:5px;padding:3px 8px;">Copy</button>' +
+						'<button type="button" class="fw-le-debug__close" style="cursor:pointer;background:transparent;color:#c8d6f5;border:0;font-size:16px;line-height:1;">×</button>' +
+					'</div>' +
+					'<pre class="fw-le-debug__body" style="margin:0;padding:10px;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#f4f8ff;text-shadow:none;"></pre>' +
+				'</div>'
+			).appendTo( 'body' );
+
+			this.$.debug.find( '.fw-le-debug__close' ).on( 'click', function () { self.toggleDebug( false ); } );
+			this.$.debug.find( '.fw-le-debug__test' ).on( 'click', function () { self.testFreshRender( this ); } );
+			this.$.debug.find( '.fw-le-debug__copy' ).on( 'click', function () {
+				var txt = self.formatDiag( self.lastDiag || {} );
+				var done = function () { $( this ).text( 'Copied' ); }.bind( this );
+				if ( navigator.clipboard && navigator.clipboard.writeText ) {
+					navigator.clipboard.writeText( txt ).then( done, function () {} );
+				} else {
+					var ta = document.createElement( 'textarea' );
+					ta.value = txt; document.body.appendChild( ta ); ta.select();
+					try { document.execCommand( 'copy' ); } catch ( e ) {}
+					document.body.removeChild( ta ); done();
+				}
+				var btn = this;
+				window.setTimeout( function () { btn.textContent = 'Copy'; }, 1200 );
+			} );
+		},
+
+		refreshDebug: function () {
+			// Ask the canvas for its snapshot; renderDebug runs again when it replies.
+			this.toFrame( 'diag-request', {} );
+			this.renderDebug();
+		},
+
+		// Non-destructive test of the escape-hatch: render the model fresh via the
+		// render_page AJAX (admin-ajax, force_edit_render — bypasses theme/the_content
+		// rendering) and report how many stamps the produced HTML contains, WITHOUT
+		// swapping it into the canvas. If this returns stamps>0 while the live page has
+		// 0, the self-healing auto-render fix will work on this site.
+		testFreshRender: function ( btn ) {
+			var self = this;
+			if ( btn ) { btn.textContent = 'Testing…'; }
+			this.ajax( cfg.actions.renderPage, { json: JSON.stringify( this.model ) }, function ( r ) {
+				var msg;
+				if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+					var tmp = document.createElement( 'div' );
+					tmp.innerHTML = r.data.html;
+					var stamps = tmp.querySelectorAll( '[data-fw-item-id]' ).length;
+					msg = 'Fresh AJAX render → ' + stamps + ' stamps in ' + r.data.html.length + ' chars. ' +
+						( stamps > 0
+							? 'GOOD: the escape-hatch render produces stamps — the self-healing fix will work here.'
+							: 'BAD: even the fresh AJAX render produced 0 stamps — the problem is in do_shortcode/section rendering itself, not the page render.' );
+				} else {
+					msg = 'render_page AJAX failed: ' + JSON.stringify( r && r.data ? r.data : r ).slice( 0, 300 );
+				}
+				self.lastTestResult = msg;
+				window.console && console.log( '[fw-le-shell] ' + msg );
+				window.alert( msg );
+				if ( btn ) { btn.textContent = 'Test render'; }
+			} );
+		},
+
+		renderDebug: function () {
+			if ( ! this.$.debug || this.$.debug.css( 'display' ) === 'none' ) { return; }
+			var fwScripts = Array.prototype.map.call( document.scripts, function ( s ) { return s.src; } )
+				.filter( function ( s ) { return /\/(fw|backend-options|fw-events)\b|fw\.js/.test( s ); } );
+			this.lastDiag = {
+				shell: {
+					version:       cfg.version || '?',
+					frameReady:    !! this.frameReady,
+					modelItems:    this.model.length,
+					indexed:       Object.keys( this.index ).length,
+					optionsModal:  typeof fw !== 'undefined' && !! ( fw && fw.OptionsModal ),
+					runtime:       cfg.runtime || null,
+					fwScriptCount: fwScripts.length,
+					errors:        SHELL_ERRORS.slice()
+				},
+				frame: this.frameDiag || '(awaiting canvas response…)'
+			};
+			var pre = this.$.debug.find( '.fw-le-debug__body' )[ 0 ];
+			if ( pre ) { pre.textContent = this.formatDiag( this.lastDiag ); }
+		},
+
+		// Lead with a plain-language verdict, then the raw JSON for copy/paste.
+		formatDiag: function ( d ) {
+			var f = d.frame, out = [];
+			out.push( '=== UnysonPlus Live Editor diagnostics ===' );
+			if ( d.shell ) {
+				out.push( 'shell: v' + d.shell.version + '  frameReady=' + d.shell.frameReady +
+					'  modelItems=' + d.shell.modelItems + '  indexed=' + d.shell.indexed +
+					'  optionsModal=' + d.shell.optionsModal );
+				if ( d.shell.errors && d.shell.errors.length ) { out.push( 'shell errors: ' + d.shell.errors.join( ' | ' ) ); }
+			}
+			if ( f && typeof f === 'object' ) {
+				out.push( 'canvas: v' + f.version + '  started=' + f.started + '  eventsBound=' + f.eventsBound +
+					'  overlay=' + f.overlayPresent );
+				out.push( 'canvas: indexed=' + f.indexed + '  DOM stamps=' + f.domStamps +
+					'  matched=' + f.matched + '  mousemove=' + f.moveCount + ( f.lastMove ? ' (' + f.lastMove + ')' : '' ) );
+				if ( f.errors && f.errors.length ) { out.push( 'canvas errors: ' + f.errors.join( ' | ' ) ); }
+				var sd = f.serverDiag;
+				if ( sd ) {
+					out.push( 'server: editRender=' + sd.editRender + '  stamped=' + sd.stamped +
+						'  forcedWrappers=' + sd.forcedWrappers + '  the_content runs=' + sd.theContentRuns +
+						' (len=' + sd.theContentLen + ')  theme=' + sd.theme + '  tpl=' + ( sd.template || '-' ) );
+					out.push( 'server: builderActive=' + sd.builderActive + '  hasBuilderJson=' + sd.hasBuilderJson +
+						'  scSurvived=' + sd.scSurvived );
+					out.push( 'server: shortcodesVer=' + sd.shortcodesVer + '  pageBuilderVer=' + sd.pageBuilderVer +
+						'  helpers=' + sd.helperWrapper + '/' + sd.helperNeeds +
+						'  registered section=' + sd.scSection + ' text_block=' + sd.scTextBlock );
+					out.push( 'server: stampHooked=' + sd.stampHooked + '  probeFired=' + sd.probeFired +
+						'  wrapperCalls=' + sd.wrapperCalls + '  wrapperEditCalls=' + sd.wrapperEditCalls +
+						'  (sc_build_wrapper_attr invocations during the real render)' );
+					if ( sd.theContentSample ) {
+						out.push( 'content head: ' + JSON.stringify( sd.theContentSample.slice( 0, 120 ) ) );
+					}
+				} else {
+					out.push( 'server: (no _fwLeServerDiag — wp_footer probe absent: footer not rendered, or an' );
+					out.push( '         optimizer stripped the inline script)' );
+				}
+				out.push( '' );
+				if ( f.domStamps === 0 && sd && sd.stamped > 0 ) {
+					out.push( 'VERDICT: the server DID stamp ' + sd.stamped + ' elements, but the browser DOM has 0 →' );
+					out.push( 'an HTML optimizer / minifier is STRIPPING data-* attributes after render.' );
+					out.push( 'Fix: disable attribute minification, or exclude ?fw-live-editor-frame=1 from it.' );
+				} else if ( f.domStamps === 0 && sd && sd.stamped === 0 && sd.builderActive === false ) {
+					out.push( 'VERDICT: builder_active is FALSE for this page → the page-builder serves the' );
+					out.push( 'pre-rendered post_content (static HTML) instead of live shortcodes, so nothing is' );
+					out.push( 'stamped. The page was likely saved/imported with the builder toggled off (JSON is' );
+					out.push( ( sd.hasBuilderJson ? 'present' : 'MISSING' ) + '). Fix: re-enable the page builder on this page (open it in the' );
+					out.push( 'backend builder and Update), or the editor can force live rendering regardless.' );
+				} else if ( f.domStamps === 0 && sd && sd.stamped === 0 && sd.scSurvived ) {
+					out.push( 'VERDICT: the canvas received live "[section …]" shortcodes but they were NOT consumed by' );
+					out.push( 'do_shortcode (still present after rendering). registered: section=' + sd.scSection +
+						' text_block=' + sd.scTextBlock + '.' );
+					out.push( 'The shortcodes aren\'t registered on this request — the shortcodes extension didn\'t' );
+					out.push( 'load/run. Fix: ensure the Shortcodes + Page Builder extensions are active & current.' );
+				} else if ( f.domStamps === 0 && sd && sd.stamped === 0 && ! sd.helperWrapper ) {
+					out.push( 'VERDICT: the stamping helper sc_build_wrapper_attr() does NOT exist on this site →' );
+					out.push( 'the Shortcodes extension is OLDER than the Live Editor requires. Fix: update the' );
+					out.push( 'Shortcodes + Page Builder extensions (shortcodesVer=' + sd.shortcodesVer +
+						', pageBuilderVer=' + sd.pageBuilderVer + ').' );
+				} else if ( f.domStamps === 0 && sd && sd.stampHooked && sd.probeFired === false ) {
+					out.push( 'VERDICT: CONFIRMED — the deployed shortcode-build-helper.php is STALE. Our stamp filter' );
+					out.push( 'IS registered (stampHooked=true) but calling sc_build_wrapper_attr does NOT run it' );
+					out.push( '(probeFired=false) → the deployed function is missing its' );
+					out.push( 'apply_filters(\'sc_build_wrapper_attr\') line, even though its version reads ' + sd.shortcodesVer + '.' );
+					out.push( 'Fix: re-upload the Shortcodes extension files (the build on this site is older than' );
+					out.push( 'its version number claims), then clear the WP Engine object cache.' );
+				} else if ( f.domStamps === 0 && sd && sd.stampHooked === false ) {
+					out.push( 'VERDICT: our stamp filter is NOT registered (stampHooked=false) → the Live Editor' );
+					out.push( 'extension did not hook sc_build_wrapper_attr this request. Unexpected — report this.' );
+				} else if ( f.domStamps === 0 && sd && sd.probeFired && sd.wrapperCalls === 0 && sd.theContentRuns > 0 ) {
+					out.push( 'VERDICT: CONFIRMED — shortcode output is being served from a CACHE. The stamping code' );
+					out.push( 'works (probeFired=true) but sc_build_wrapper_attr was NEVER called during the real' );
+					out.push( 'render (wrapperCalls=0) even though [section] shortcodes reached the_content and were' );
+					out.push( 'consumed → the shortcode VIEWS did not execute; their pre-rendered (stampless) HTML' );
+					out.push( 'was returned from cache. Fix: purge the persistent object cache (WP Engine →' );
+					out.push( 'Clear all caches; and any shortcode/Redis/Memcached cache). The cache was populated' );
+					out.push( 'by a normal front-end view (no stamps); the editor needs a fresh, uncached render.' );
+				} else if ( f.domStamps === 0 && sd && sd.wrapperCalls > 0 && sd.wrapperEditCalls === 0 ) {
+					out.push( 'VERDICT: sc_build_wrapper_attr ran ' + sd.wrapperCalls + ' times but is_edit_render was FALSE' );
+					out.push( 'every time (wrapperEditCalls=0) → the canvas request wasn\'t flagged as edit-render' );
+					out.push( 'during content rendering (a memoization/timing issue). Report this.' );
+				} else if ( f.domStamps === 0 && sd && sd.wrapperEditCalls > 0 && sd.stamped === 0 ) {
+					out.push( 'VERDICT: sc_build_wrapper_attr ran in edit mode ' + sd.wrapperEditCalls + ' times but stamped 0 →' );
+					out.push( 'the atts passed to it have no unique_id. The shortcode→atts path is dropping unique_id.' );
+				} else if ( f.domStamps === 0 && sd && sd.stamped === 0 && sd.theContentRuns > 0 ) {
+					out.push( 'VERDICT: live shortcodes reached the canvas but NONE stamped (stamped=0, wrapperCalls=' +
+						sd.wrapperCalls + '). Shortcodes/Page Builder build out of sync, or output cached.' );
+					out.push( 'Fix: re-upload the extensions and purge the object cache.' );
+				} else if ( f.domStamps === 0 && sd && sd.theContentRuns === 0 ) {
+					out.push( 'VERDICT: the_content never ran in the canvas (theme front-page/template renders the' );
+					out.push( 'builder a different way), so nothing was stamped. Theme=' + sd.theme + ', tpl=' + ( sd.template || '-' ) + '.' );
+				} else if ( f.domStamps === 0 && sd && ! sd.editRender ) {
+					out.push( 'VERDICT: editRender=false server-side → the frame request was NOT recognized as the' );
+					out.push( 'editor canvas (is_frame_request returned false). Likely the ?fw-live-editor-frame query' );
+					out.push( 'was dropped, or edit-permission/builder-post check failed for this request.' );
+				} else if ( f.domStamps === 0 ) {
+					out.push( 'VERDICT: No data-fw-item-id stamps in the canvas markup, and no server probe to say why' );
+					out.push( '(see server line above). Most likely a page cache / HTML optimizer. Fix: exclude the' );
+					out.push( 'editor frame (?fw-live-editor-frame=1) from caching/optimization, or purge the cache.' );
+				} else if ( f.matched === 0 ) {
+					out.push( 'VERDICT: ' + f.domStamps + ' stamps present but NONE match the model ids → id mismatch' );
+					out.push( '(the rendered HTML is from a different/older save than the loaded model).' );
+				} else if ( f.moveCount === 0 ) {
+					out.push( 'VERDICT: stamps present & matched, but no pointer events reached the canvas →' );
+					out.push( 'something is intercepting the mouse (an overlay element or a fixed-position' );
+					out.push( 'theme/plugin layer above the canvas). Selection logic is fine.' );
+				} else {
+					out.push( 'VERDICT: ' + f.matched + ' stamps matched and pointer events are flowing — the core' );
+					out.push( 'selection path is healthy. If a specific element still won\'t select, check its' );
+					out.push( 'overlay z-index / CSS.' );
+				}
+			} else {
+				out.push( 'canvas: ' + String( f ) );
+				out.push( '' );
+				out.push( 'VERDICT: the canvas iframe has not answered the diagnostics request. If this' );
+				out.push( 'persists, the frame script did not load or a cross-origin issue is blocking' );
+				out.push( 'postMessage.' );
+			}
+			out.push( '' );
+			out.push( JSON.stringify( d, null, 2 ) );
+			return out.join( '\n' );
 		},
 
 		/** Switch the canvas to a device-preview width. The iframe's own viewport

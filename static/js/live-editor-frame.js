@@ -16,6 +16,17 @@
 ( function ( $ ) {
 	'use strict';
 
+	// Capture errors early (before anything else runs) so the diagnostics HUD can
+	// surface a conflicting plugin's exception even if it aborts our own init.
+	var FRAME_ERRORS = [];
+	function pushErr( msg ) { FRAME_ERRORS.push( String( msg ) ); if ( FRAME_ERRORS.length > 25 ) { FRAME_ERRORS.shift(); } }
+	window.addEventListener( 'error', function ( e ) {
+		pushErr( ( e.message || 'error' ) + ' @ ' + ( e.filename || '?' ).replace( /^.*\//, '' ) + ':' + ( e.lineno || 0 ) );
+	}, true );
+	window.addEventListener( 'unhandledrejection', function ( e ) {
+		pushErr( 'promise: ' + ( ( e.reason && e.reason.message ) || e.reason || '?' ) );
+	} );
+
 	// Restore non-passive listeners for interactive events on this iframe document.
 	// Some hosts/extensions globally force addEventListener passive, which breaks
 	// preventDefault() for clicks, drags and key handling. Mirrors the shell's
@@ -152,6 +163,23 @@
 		init: function () {
 			this.log( 'init', { postId: this.config.postId, href: window.location.href, hasParent: window.parent !== window } );
 
+			// Always-on pointer probe for diagnostics — independent of bindEvents() so
+			// it still reports even if selection binding fails. If moveCount stays 0
+			// while the user moves over the canvas, pointer events aren't reaching this
+			// document (an overlay / iframe interception), not a stamp problem.
+			var dself = this;
+			this._moveCount = 0;
+			this._lastMove  = '';
+			document.addEventListener( 'mousemove', function ( e ) {
+				dself._moveCount++;
+				var t = e.target;
+				if ( t && t.tagName ) {
+					var cls = ( typeof t.className === 'string' && t.className )
+						? '.' + t.className.split( /\s+/ ).slice( 0, 2 ).join( '.' ) : '';
+					dself._lastMove = t.tagName.toLowerCase() + cls;
+				}
+			}, true );
+
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 			document.documentElement.classList.add( 'fw-le-frame-ready' );
 			if ( document.body ) { document.body.classList.add( 'fw-live-editor-frame-active' ); }
@@ -182,7 +210,7 @@
 
 		toShell: function ( type, payload ) {
 			if ( window.parent && window.parent !== window ) {
-				this.log( 'send → shell', type );
+				if ( type !== 'diag' ) { this.log( 'send → shell', type ); } // diag: high-frequency poll
 				window.parent.postMessage( { ns: NS, type: type, payload: payload }, '*' );
 			} else {
 				this.log( 'no parent window to message' );
@@ -211,6 +239,7 @@
 				this.buildIndex( this.model, null );
 				this.buildOverlay();
 				this.bindEvents();
+				this._eventsBound = true;
 				this.markEmptyColumns();
 				this.ensureAddSectionZone();
 				this.ensureSectionAddColZones();
@@ -258,7 +287,49 @@
 				this.els.dropline.style.display = 'none';
 			} else if ( data.type === 'remove' ) {
 				this.removeItem( data.payload );
+			} else if ( data.type === 'diag-request' ) {
+				this.toShell( 'diag', this.collectDiag() );
 			}
+		},
+
+		/* ---- diagnostics ------------------------------------------------ */
+
+		// Snapshot of the canvas state the shell's debug HUD renders. The decisive
+		// numbers: domStamps (data-fw-item-id elements actually in the markup) and
+		// matched (those whose id is in the model index). 0 stamps ⇒ edit-render
+		// markup missing; stamps but matched 0 ⇒ id mismatch; matched but moveCount
+		// 0 ⇒ pointer events intercepted.
+		collectDiag: function () {
+			var domEls = document.querySelectorAll( '[data-fw-item-id]' );
+			var domIds = [], matched = 0, orphan = [];
+			for ( var i = 0; i < domEls.length; i++ ) {
+				var id = domEls[ i ].getAttribute( 'data-fw-item-id' );
+				domIds.push( id );
+				if ( this.index[ id ] ) { matched++; }
+				else if ( orphan.length < 5 ) { orphan.push( id ); }
+			}
+			var indexIds = Object.keys( this.index || {} );
+			return {
+				version:        ( this.config && this.config.version ) || '?',
+				started:        !! this.started,
+				eventsBound:    !! this._eventsBound,
+				overlayPresent: !! document.getElementById( 'fw-le-overlay' ),
+				modelLen:       ( this.model && this.model.length ) || 0,
+				indexed:        indexIds.length,
+				domStamps:      domEls.length,
+				matched:        matched,
+				orphanDomIds:   orphan,
+				sampleDomIds:   domIds.slice( 0, 5 ),
+				sampleIndexIds: indexIds.slice( 0, 5 ),
+				moveCount:      this._moveCount || 0,
+				lastMove:       this._lastMove || '',
+				bodyClass:      document.body ? document.body.className : '',
+				docTitle:       document.title,
+				// Server-side render facts (printed by PHP into this document) — the
+				// decisive evidence for why stamps are missing.
+				serverDiag:     window._fwLeServerDiag || null,
+				errors:         FRAME_ERRORS.slice()
+			};
 		},
 
 		/* Pointer-relayed drag-to-add (coords are iframe-viewport relative). */
