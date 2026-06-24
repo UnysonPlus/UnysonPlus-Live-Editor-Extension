@@ -193,6 +193,15 @@ body.fw-live-editor-frame-active .fw-le-add-section-btn em {
 body.fw-live-editor-frame-active .fw-le-addcol-zone {
 	padding: 10px 16px 14px;
 	text-align: center;
+	/* The zone lives inside the theme's column row (often a flex/grid container), so
+	 * force it to occupy a full row of its own beneath the columns rather than being
+	 * laid out as another column beside them. */
+	flex: 0 0 100% !important;
+	width: 100% !important;
+	max-width: 100% !important;
+	box-sizing: border-box;
+	clear: both;
+	order: 9999;
 }
 
 body.fw-live-editor-frame-active .fw-le-addcol-btn {
@@ -301,6 +310,52 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 
 #fw-le-overlay .fw-le-tag__btn svg {
 	display: block;
+}
+
+/* ---- Theme-proofing -------------------------------------------------------
+ * The overlay is injected into the canvas (the real, themed page), so the active
+ * theme's generic button/svg rules bleed in — e.g. Twenty Twenty-One pads buttons
+ * (clipping the 13px icon) and fills SVG paths (overriding the inline fill="none",
+ * which turns the outline icons into solid blobs / blanks). Re-assert the toolbar
+ * essentials with enough weight to beat any theme. */
+#fw-le-overlay button {
+	margin: 0 !important;
+	padding: 0 !important;
+	min-width: 0 !important;
+	min-height: 0 !important;
+	max-width: none !important;
+	border-radius: 0 !important;
+	box-shadow: none !important;
+	line-height: 1 !important;
+	font: inherit !important;
+	text-transform: none !important;
+	letter-spacing: 0 !important;
+	text-decoration: none !important;
+	-webkit-appearance: none !important;
+	appearance: none !important;
+}
+
+#fw-le-overlay .fw-le-tag__btn {
+	color: #fff !important;
+}
+
+#fw-le-overlay svg {
+	width: 13px !important;
+	height: 13px !important;
+	overflow: visible;
+	vertical-align: middle;
+	filter: none !important;
+}
+
+/* Preserve each icon's intended paint over theme path/svg fill rules. */
+#fw-le-overlay svg [fill="none"] {
+	fill: none !important;
+}
+#fw-le-overlay svg [fill="currentColor"] {
+	fill: currentColor !important;
+}
+#fw-le-overlay svg [stroke="currentColor"] {
+	stroke: currentColor !important;
 }
 
 #fw-le-overlay .fw-le-tag__btn--danger:hover {

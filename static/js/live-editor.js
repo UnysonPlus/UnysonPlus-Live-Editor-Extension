@@ -42,6 +42,23 @@
 			.replace( /\b\w/g, function ( c ) { return c.toUpperCase(); } );
 	}
 
+	/**
+	 * Toast helper. fw.notify (from the framework runtime) is NOT a guaranteed
+	 * dependency inside the live-editor shell, so fall back to a blocking
+	 * alert() when it isn't present. Reference window.fw (not bare fw) so an
+	 * absent global doesn't throw a ReferenceError.
+	 *
+	 * @param {String} msg
+	 * @param {String} [type] 'info' (default) | 'success' | 'warning' | 'error'
+	 */
+	function notify( msg, type ) {
+		if ( window.fw && window.fw.notify ) {
+			window.fw.notify( msg, type || 'info' );
+		} else {
+			window.alert( msg );
+		}
+	}
+
 	function labelFor( node ) {
 		if ( ! node ) { return 'Element'; }
 		var t = node.type;
@@ -1152,11 +1169,11 @@
 			var l = cfg.l10n || {};
 			this.ajax( cfg.actions.revisionGet, { id: id }, function ( resp ) {
 				if ( ! ( resp && resp.success && resp.data && typeof resp.data.json === 'string' ) ) {
-					window.alert( l.revisionError || 'Could not load this version.' );
+					notify( l.revisionError || 'Could not load this version.', 'error' );
 					return;
 				}
 				var parsed;
-				try { parsed = JSON.parse( resp.data.json ); } catch ( e ) { window.alert( l.revisionError || 'Could not load this version.' ); return; }
+				try { parsed = JSON.parse( resp.data.json ); } catch ( e ) { notify( l.revisionError || 'Could not load this version.', 'error' ); return; }
 				if ( ! Array.isArray( parsed ) ) { return; }
 				self.confirm( {
 					title:       l.restoreRevTitle || 'Restore this version?',
@@ -1314,10 +1331,10 @@
 					.done( function ( json ) {
 						if ( json && json.success ) { self.refreshTemplates(); }
 						else {
-							window.alert( ( json && json.data && json.data.message ) || ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template' );
+							notify( ( json && json.data && json.data.message ) || ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template', 'error' );
 						}
 					} )
-					.fail( function () { window.alert( ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template' ); } );
+					.fail( function () { notify( ( cfg.l10n && cfg.l10n.importFailed ) || 'Failed to import template', 'error' ); } );
 			} );
 
 			// Save the page / current section / current column as a template.
@@ -1379,11 +1396,11 @@
 				jsonKey = 'builder_json'; jsonVal = JSON.stringify( this.model );
 			} else if ( type === 'section' ) {
 				var sec = this.currentSectionNode();
-				if ( ! sec ) { window.alert( l.noSectionSelected || 'Select a section first.' ); return; }
+				if ( ! sec ) { notify( l.noSectionSelected || 'Select a section first.', 'warning' ); return; }
 				jsonKey = 'section_json'; jsonVal = JSON.stringify( sec );
 			} else if ( type === 'column' ) {
 				var col = this.currentColumnNode();
-				if ( ! col ) { window.alert( l.noColumnSelected || 'Select a column first.' ); return; }
+				if ( ! col ) { notify( l.noColumnSelected || 'Select a column first.', 'warning' ); return; }
 				jsonKey = 'column_json'; jsonVal = JSON.stringify( col );
 			} else { return; }
 
@@ -1459,7 +1476,7 @@
 			var self = this;
 			var section = this.currentSectionNode() || ( this.model.length ? this.model[ this.model.length - 1 ] : null );
 			if ( ! section || ! isContainer( section ) ) {
-				window.alert( ( cfg.l10n && cfg.l10n.noSectionTarget ) || 'Add or select a section first.' ); return;
+				notify( ( cfg.l10n && cfg.l10n.noSectionTarget ) || 'Add or select a section first.', 'warning' ); return;
 			}
 			var sectionId = ( section.atts && section.atts.unique_id ) || section.unique_id;
 			var col       = this.cloneWithNewIds( item );
@@ -1488,7 +1505,7 @@
 			if ( ! node ) { return; }
 			var t = cfg.templates;
 			if ( ! ( t && t.enabled ) ) {
-				window.alert( ( cfg.l10n && cfg.l10n.templatesError ) || 'Templates are unavailable.' ); return;
+				notify( ( cfg.l10n && cfg.l10n.templatesError ) || 'Templates are unavailable.', 'warning' ); return;
 			}
 			var type = /section$/.test( node.type || '' ) ? 'section'
 				: ( node.type === 'column' ? 'column' : '' );
@@ -1639,15 +1656,15 @@
 		pasteItem: function ( selectedId ) {
 			var item = this.readClipboard();
 			if ( ! item ) {
-				window.alert( ( cfg.l10n && cfg.l10n.clipboardEmpty ) || 'Nothing to paste — copy an element first.' );
+				notify( ( cfg.l10n && cfg.l10n.clipboardEmpty ) || 'Nothing to paste — copy an element first.', 'warning' );
 				return;
 			}
 			var kind = kindOf( item );
 			var target = this.resolvePasteTarget( selectedId, kind );
 			if ( ! target ) {
-				window.alert( kind === 'element'
+				notify( kind === 'element'
 					? ( ( cfg.l10n && cfg.l10n.pasteNeedColumn ) || 'Select a column or element to paste into.' )
-					: ( ( cfg.l10n && cfg.l10n.pasteNeedSection ) || 'Add or select a section first.' ) );
+					: ( ( cfg.l10n && cfg.l10n.pasteNeedSection ) || 'Add or select a section first.' ), 'warning' );
 				return;
 			}
 
@@ -1738,7 +1755,7 @@
 			if ( ! node ) { return; }
 			var clip = this.readSettingsClipboard();
 			if ( ! clip ) {
-				window.alert( ( cfg.l10n && cfg.l10n.noSettings ) || 'No settings copied yet — use "Copy Settings" first.' );
+				notify( ( cfg.l10n && cfg.l10n.noSettings ) || 'No settings copied yet — use "Copy Settings" first.', 'warning' );
 				return;
 			}
 			var self = this, tag = tagFor( node );
@@ -1754,7 +1771,7 @@
 					applied++;
 				} );
 				if ( ! applied ) {
-					window.alert( ( cfg.l10n && cfg.l10n.noSettingsApplied ) || 'None of the copied settings apply to this element.' );
+					notify( ( cfg.l10n && cfg.l10n.noSettingsApplied ) || 'None of the copied settings apply to this element.', 'warning' );
 					return;
 				}
 				self.markDirty();
@@ -1842,7 +1859,7 @@
 			var node = this.nodeOf( id );
 			if ( ! node ) { return; }
 			if ( typeof wp === 'undefined' || ! wp.media ) {
-				window.alert( 'The media library could not load. Please check the browser console.' );
+				notify( 'The media library could not load. Please check the browser console.', 'error' );
 				return;
 			}
 
@@ -2182,7 +2199,7 @@
 						fw:    typeof fw,
 						Modal: ( typeof fw !== 'undefined' && fw ) ? typeof fw.OptionsModal : 'n/a'
 					} );
-					window.alert( 'The options editor could not load. Please check the browser console.' );
+					notify( 'The options editor could not load. Please check the browser console.', 'error' );
 					return;
 				}
 
@@ -2461,6 +2478,7 @@
 					'<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid #3a4f86;">' +
 						'<strong style="flex:1;color:#fff;">Live Editor diagnostics</strong>' +
 						'<button type="button" class="fw-le-debug__test" style="cursor:pointer;background:#1f5a3a;color:#fff;border:1px solid #2f8a5a;border-radius:5px;padding:3px 8px;">Test render</button>' +
+						'<button type="button" class="fw-le-debug__opcache" style="cursor:pointer;background:#6a3a1f;color:#fff;border:1px solid #a8662f;border-radius:5px;padding:3px 8px;">Flush OpCache</button>' +
 						'<button type="button" class="fw-le-debug__copy" style="cursor:pointer;background:#2a3f73;color:#fff;border:1px solid #4a66a8;border-radius:5px;padding:3px 8px;">Copy</button>' +
 						'<button type="button" class="fw-le-debug__close" style="cursor:pointer;background:transparent;color:#c8d6f5;border:0;font-size:16px;line-height:1;">×</button>' +
 					'</div>' +
@@ -2470,6 +2488,7 @@
 
 			this.$.debug.find( '.fw-le-debug__close' ).on( 'click', function () { self.toggleDebug( false ); } );
 			this.$.debug.find( '.fw-le-debug__test' ).on( 'click', function () { self.testFreshRender( this ); } );
+			this.$.debug.find( '.fw-le-debug__opcache' ).on( 'click', function () { self.flushOpcache( this ); } );
 			this.$.debug.find( '.fw-le-debug__copy' ).on( 'click', function () {
 				var txt = self.formatDiag( self.lastDiag || {} );
 				var done = function () { $( this ).text( 'Copied' ); }.bind( this );
@@ -2492,6 +2511,23 @@
 			this.renderDebug();
 		},
 
+		// Force-flush PHP OpCache (stale bytecode is why updated views run an old way),
+		// then automatically re-run Test render so both results land in the panel.
+		flushOpcache: function ( btn ) {
+			var self = this;
+			if ( btn ) { btn.textContent = 'Flushing…'; }
+			this.ajax( cfg.actions.opcacheFlush, {}, function ( r ) {
+				var d = r && r.data ? r.data : r;
+				self.opcacheResult = 'OpCache flush → ' + JSON.stringify( d );
+				window.console && console.log( '[fw-le-shell] ' + self.opcacheResult );
+				if ( btn ) { btn.textContent = 'Flush OpCache'; }
+				self.renderDebug();
+				// A flush clears the shared cache; the NEXT request recompiles. Give it a
+				// beat, then test-render (a fresh request) — it should now stamp.
+				window.setTimeout( function () { self.testFreshRender( null ); }, 400 );
+			} );
+		},
+
 		// Non-destructive test of the escape-hatch: render the model fresh via the
 		// render_page AJAX (admin-ajax, force_edit_render — bypasses theme/the_content
 		// rendering) and report how many stamps the produced HTML contains, WITHOUT
@@ -2501,21 +2537,21 @@
 			var self = this;
 			if ( btn ) { btn.textContent = 'Testing…'; }
 			this.ajax( cfg.actions.renderPage, { json: JSON.stringify( this.model ) }, function ( r ) {
-				var msg;
+				var summary, html = '';
 				if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+					html = r.data.html;
 					var tmp = document.createElement( 'div' );
-					tmp.innerHTML = r.data.html;
+					tmp.innerHTML = html;
 					var stamps = tmp.querySelectorAll( '[data-fw-item-id]' ).length;
-					msg = 'Fresh AJAX render → ' + stamps + ' stamps in ' + r.data.html.length + ' chars. ' +
-						( stamps > 0
-							? 'GOOD: the escape-hatch render produces stamps — the self-healing fix will work here.'
-							: 'BAD: even the fresh AJAX render produced 0 stamps — the problem is in do_shortcode/section rendering itself, not the page render.' );
+					summary = 'Fresh AJAX render → ' + stamps + ' stamps in ' + html.length + ' chars.';
 				} else {
-					msg = 'render_page AJAX failed: ' + JSON.stringify( r && r.data ? r.data : r ).slice( 0, 300 );
+					summary = 'render_page AJAX FAILED. response: ' + JSON.stringify( r && r.data ? r.data : r ).slice( 0, 400 );
 				}
-				self.lastTestResult = msg;
-				window.console && console.log( '[fw-le-shell] ' + msg );
-				window.alert( msg );
+				// Stash the full produced HTML so it shows in the HUD and copies with Copy.
+				self.testRender = { summary: summary, html: html };
+				window.console && console.log( '[fw-le-shell] ' + summary + '\nHTML:\n' + html );
+				self.renderDebug();
+				window.alert( summary + '\n\nThe full produced HTML is now at the top of the diagnostics panel — click Copy and paste it to me.' );
 				if ( btn ) { btn.textContent = 'Test render'; }
 			} );
 		},
@@ -2545,6 +2581,18 @@
 		formatDiag: function ( d ) {
 			var f = d.frame, out = [];
 			out.push( '=== UnysonPlus Live Editor diagnostics ===' );
+			if ( this.opcacheResult ) {
+				out.push( this.opcacheResult );
+				out.push( '' );
+			}
+			if ( this.testRender ) {
+				out.push( '--- TEST RENDER (fresh model via render_page AJAX) ---' );
+				out.push( this.testRender.summary );
+				out.push( 'PRODUCED HTML:' );
+				out.push( this.testRender.html || '(empty)' );
+				out.push( '--- end test render ---' );
+				out.push( '' );
+			}
 			if ( d.shell ) {
 				out.push( 'shell: v' + d.shell.version + '  frameReady=' + d.shell.frameReady +
 					'  modelItems=' + d.shell.modelItems + '  indexed=' + d.shell.indexed +
@@ -2570,8 +2618,16 @@
 					out.push( 'server: stampHooked=' + sd.stampHooked + '  probeFired=' + sd.probeFired +
 						'  wrapperCalls=' + sd.wrapperCalls + '  wrapperEditCalls=' + sd.wrapperEditCalls +
 						'  (sc_build_wrapper_attr invocations during the real render)' );
+					out.push( 'server: opcacheEnabled=' + sd.opcacheEnabled + '  validate_timestamps=' + sd.opcacheValidate +
+						'  revalidate_freq=' + sd.opcacheFreq + '  canReset=' + sd.opcacheCanReset );
+					out.push( 'server: shortcodesPath=' + sd.shortcodesPath );
+					out.push( 'server: sectionView=' + sd.sectionView );
+					out.push( 'server: sectionViewIsCurrent(file has sc_build_wrapper_attr)=' + sd.sectionViewIsCurrent );
 					if ( sd.theContentSample ) {
-						out.push( 'content head: ' + JSON.stringify( sd.theContentSample.slice( 0, 120 ) ) );
+						out.push( 'content head (raw):  ' + JSON.stringify( sd.theContentSample.slice( 0, 120 ) ) );
+					}
+					if ( sd.theContentLate ) {
+						out.push( 'content head (after do_shortcode): ' + JSON.stringify( sd.theContentLate.slice( 0, 120 ) ) );
 					}
 				} else {
 					out.push( 'server: (no _fwLeServerDiag — wp_footer probe absent: footer not rendered, or an' );
@@ -2610,13 +2666,13 @@
 					out.push( 'VERDICT: our stamp filter is NOT registered (stampHooked=false) → the Live Editor' );
 					out.push( 'extension did not hook sc_build_wrapper_attr this request. Unexpected — report this.' );
 				} else if ( f.domStamps === 0 && sd && sd.probeFired && sd.wrapperCalls === 0 && sd.theContentRuns > 0 ) {
-					out.push( 'VERDICT: CONFIRMED — shortcode output is being served from a CACHE. The stamping code' );
-					out.push( 'works (probeFired=true) but sc_build_wrapper_attr was NEVER called during the real' );
-					out.push( 'render (wrapperCalls=0) even though [section] shortcodes reached the_content and were' );
-					out.push( 'consumed → the shortcode VIEWS did not execute; their pre-rendered (stampless) HTML' );
-					out.push( 'was returned from cache. Fix: purge the persistent object cache (WP Engine →' );
-					out.push( 'Clear all caches; and any shortcode/Redis/Memcached cache). The cache was populated' );
-					out.push( 'by a normal front-end view (no stamps); the editor needs a fresh, uncached render.' );
+					out.push( 'VERDICT: CONFIRMED — STALE PHP OpCache. The stamping code works (probeFired=true) but' );
+					out.push( 'sc_build_wrapper_attr is never called during render (wrapperCalls=0) because the' );
+					out.push( 'shortcode VIEWS are running OLD bytecode that predates the stamping integration —' );
+					out.push( 'the disk files are current but OpCache (validate_timestamps=' + sd.opcacheValidate + ') is' );
+					out.push( 'serving stale compiled code. WP Engine "Clear all caches" does NOT flush OpCache.' );
+					out.push( 'FIX: click the "Flush OpCache" button above, then "Test render" (stamps should appear),' );
+					out.push( 'then hard-refresh the editor. canReset=' + sd.opcacheCanReset + '.' );
 				} else if ( f.domStamps === 0 && sd && sd.wrapperCalls > 0 && sd.wrapperEditCalls === 0 ) {
 					out.push( 'VERDICT: sc_build_wrapper_attr ran ' + sd.wrapperCalls + ' times but is_edit_render was FALSE' );
 					out.push( 'every time (wrapperEditCalls=0) → the canvas request wasn\'t flagged as edit-render' );
@@ -2657,6 +2713,15 @@
 				out.push( 'VERDICT: the canvas iframe has not answered the diagnostics request. If this' );
 				out.push( 'persists, the frame script did not load or a cross-origin issue is blocking' );
 				out.push( 'postMessage.' );
+			}
+			if ( f && typeof f === 'object' && f.sectionTrees && f.sectionTrees.length ) {
+				out.push( '' );
+				out.push( '--- SECTION DOM (first ' + f.sectionTrees.length + ') ---' );
+				for ( var si = 0; si < f.sectionTrees.length; si++ ) {
+					out.push( '[section ' + ( si + 1 ) + ']' );
+					out.push( f.sectionTrees[ si ] );
+				}
+				out.push( '--- end section DOM ---' );
 			}
 			out.push( '' );
 			out.push( JSON.stringify( d, null, 2 ) );

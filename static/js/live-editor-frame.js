@@ -328,8 +328,49 @@
 				// Server-side render facts (printed by PHP into this document) — the
 				// decisive evidence for why stamps are missing.
 				serverDiag:     window._fwLeServerDiag || null,
+				// DOM structure of the first 2 sections (tag/classes/display/item-type)
+				// so editor-chrome placement (e.g. the Add Column zone) can be reasoned
+				// about against the ACTUAL theme markup instead of guessed.
+				sectionTrees:   this.collectSectionTrees(),
 				errors:         FRAME_ERRORS.slice()
 			};
+		},
+
+		collectSectionTrees: function () {
+			var trees = [], count = 0;
+			var all = document.querySelectorAll( '[data-fw-item-id]' );
+			for ( var i = 0; i < all.length && count < 2; i++ ) {
+				var m = this.index[ all[ i ].getAttribute( 'data-fw-item-id' ) ];
+				if ( ! m || ! /section$/.test( m.type || '' ) ) { continue; }
+				count++;
+				var lines = [];
+				this.domTree( all[ i ], 0, 5, lines, '' );
+				trees.push( lines.join( '\n' ) );
+			}
+			return trees;
+		},
+
+		// Compact recursive dump: tag.classes {display, flex-wrap, align-items} <item-type>
+		// and a marker on the injected Add Column zone, so its placement is visible.
+		domTree: function ( node, depth, maxDepth, lines, prefix ) {
+			if ( ! node || node.nodeType !== 1 || depth > maxDepth ) { return; }
+			var cs  = window.getComputedStyle ? getComputedStyle( node ) : {};
+			var id  = node.getAttribute && node.getAttribute( 'data-fw-item-id' );
+			var type = ( id && this.index[ id ] ) ? this.index[ id ].type : '';
+			var cls = ( node.className && typeof node.className === 'string' )
+				? '.' + node.className.trim().split( /\s+/ ).slice( 0, 3 ).join( '.' ) : '';
+			var box = '{d:' + ( cs.display || '?' ) +
+				( cs.flexWrap && cs.flexWrap !== 'nowrap' ? ',wrap' : '' ) +
+				( cs.display === 'flex' && cs.alignItems ? ',ai:' + cs.alignItems : '' ) + '}';
+			lines.push( prefix + node.tagName.toLowerCase() + cls + ' ' + box +
+				( type ? ' <' + type + '>' : '' ) +
+				( node.classList && node.classList.contains( 'fw-le-addcol-zone' ) ? '  <-- ADD COLUMN ZONE' : '' ) );
+			// Don't recurse into editor chrome.
+			if ( node.classList && ( node.classList.contains( 'fw-le-addcol-zone' ) ||
+				node.classList.contains( 'fw-le-add-section-zone' ) ) ) { return; }
+			for ( var i = 0; i < node.children.length && i < 12; i++ ) {
+				this.domTree( node.children[ i ], depth + 1, maxDepth, lines, prefix + '  ' );
+			}
 		},
 
 		/* Pointer-relayed drag-to-add (coords are iframe-viewport relative). */
@@ -1141,7 +1182,14 @@
 				var el = all[ i ];
 				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
 				if ( ! meta || ! /section$/.test( meta.type || '' ) ) { continue; }
-				if ( el.querySelector( ':scope > .fw-le-addcol-zone' ) ) { continue; }
+
+				// Drop the zone into the COLUMN container (the shared parent of the
+				// section's columns), not the <section> itself. Appending to the
+				// section lands it in the theme's own section layout — which is often
+				// a flex/grid row, floating the zone to one side. Inside the column
+				// container it flows after the columns as a full-width bar.
+				var container = this.columnContainerOf( el ) || el;
+				if ( container.querySelector( ':scope > .fw-le-addcol-zone' ) ) { continue; }
 
 				var sid  = el.getAttribute( 'data-fw-item-id' );
 				var zone = document.createElement( 'div' );
@@ -1156,8 +1204,20 @@
 						self.toShell( 'open-column-picker', { id: sectionId } );
 					};
 				} )( sid ) );
-				el.appendChild( zone );
+				container.appendChild( zone );
 			}
+		},
+
+		/** The element that holds a section's columns — the parent of its first
+		 *  column descendant. Themes wrap columns in their own row/container (e.g.
+		 *  `.container > .row`), so this finds wherever the columns actually live. */
+		columnContainerOf: function ( sectionEl ) {
+			var nodes = sectionEl.querySelectorAll( '[data-fw-item-id]' );
+			for ( var i = 0; i < nodes.length; i++ ) {
+				var m = this.index[ nodes[ i ].getAttribute( 'data-fw-item-id' ) ];
+				if ( m && m.type === 'column' ) { return nodes[ i ].parentNode; }
+			}
+			return null;
 		},
 
 		/** Tag columns with no leaf children so CSS can render them as a visible,

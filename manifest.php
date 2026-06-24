@@ -13,9 +13,10 @@ $manifest['description'] = __(
 	'fw'
 );
 
-$manifest['version']    = '0.2.5';
+$manifest['version']    = '0.2.16';
 $manifest['display']    = true;
 $manifest['standalone'] = true;
+$manifest['thumbnail']  = 'thumbnail.svg';
 
 // Repository Info — its own repo + auto-updater (a top-level extension, like Forms).
 $manifest['github_update'] = 'UnysonPlus/UnysonPlus-Live-Editor-Extension';

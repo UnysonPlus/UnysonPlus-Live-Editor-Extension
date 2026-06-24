@@ -112,7 +112,7 @@ nocache_headers();
 					<span class="dashicons dashicons-redo"></span>
 				</button>
 				<button type="button" id="fw-le-backend" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Edit in the backend builder', 'fw' ); ?>">
-					<span class="dashicons dashicons-admin-page"></span>
+					<span class="dashicons dashicons-layout"></span>
 				</button>
 				<button type="button" id="fw-le-preview" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Preview (opens in a new tab)', 'fw' ); ?>">
 					<span class="dashicons dashicons-visibility"></span>

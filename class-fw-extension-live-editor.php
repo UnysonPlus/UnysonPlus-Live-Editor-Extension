@@ -72,6 +72,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
 		add_action( 'wp_ajax_fw_live_editor_revisions', array( $this, '_ajax_revisions' ) );
 		add_action( 'wp_ajax_fw_live_editor_revision_get', array( $this, '_ajax_revision_get' ) );
+		add_action( 'wp_ajax_fw_live_editor_opcache_flush', array( $this, '_ajax_opcache_flush' ) );
 
 		// Snapshot a revision whenever the builder content is saved through ANY
 		// editor (the live editor's _ajax_save AND the classic backend builder both
@@ -95,6 +96,12 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		//    is resolved client-side from the model, so the HTML only needs the id —
 		//    no extra DOM, so the column grid / section layout is intact.
 		add_filter( 'sc_build_wrapper_attr', array( $this, '_filter_stamp_item_id' ), 999, 2 );
+		// View-independent stamping: inject data-fw-item-id into each builder
+		// shortcode's OUTPUT. This is the safety net for themes that override the
+		// shortcode views (via framework-customizations) with copies that don't call
+		// sc_build_wrapper_attr — the filter above never fires for those, but this one
+		// stamps the rendered HTML regardless of which view produced it.
+		add_filter( 'do_shortcode_tag', array( $this, '_filter_stamp_shortcode_output' ), 10, 4 );
 
 		if ( ! is_admin() ) {
 			add_filter( 'template_include', array( $this, '_filter_template_include' ), 999 );
@@ -103,7 +110,182 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// Suppress the WP admin bar inside both the shell and the iframe — the
 			// editor provides its own toolbar and the bar only adds clutter / height.
 			add_filter( 'show_admin_bar', array( $this, '_filter_show_admin_bar' ), 99 );
+			// Diagnostics: count the_content runs in the canvas, and print a server-side
+			// probe the debug HUD reads (window._fwLeServerDiag) to tell apart "stamps
+			// never produced" from "stamps stripped after render".
+			add_filter( 'the_content', array( $this, '_probe_the_content' ), -9999 );
+			add_filter( 'the_content', array( $this, '_probe_the_content_late' ), 99 );
+			add_action( 'wp_footer', array( $this, '_action_frame_server_diag' ), 99999 );
 		}
+	}
+
+	/** @var int diagnostics — times the stamp filter added an id this request */
+	private $stamp_count = 0;
+	/** @var int diagnostics — total times sc_build_wrapper_attr ran this request */
+	private $wrapper_attr_calls = 0;
+	/** @var int diagnostics — of those, how many saw is_edit_render()===true */
+	private $wrapper_attr_edit_calls = 0;
+	/** @var int diagnostics — times the wrapper was force-enabled in edit render */
+	private $force_wrapper_count = 0;
+	/** @var int diagnostics — times the_content ran while in the editor canvas */
+	private $the_content_runs = 0;
+	/** @var int diagnostics — total raw length the_content received in the canvas */
+	private $the_content_len = 0;
+	/** @var int diagnostics — length of the largest the_content blob seen */
+	private $the_content_max_len = 0;
+	/** @var string diagnostics — head of the largest the_content blob (shortcodes vs HTML) */
+	private $the_content_sample = '';
+	/** @var bool diagnostics — did [section …] survive past do_shortcode (i.e. NOT consumed)? */
+	private $the_content_sc_survived = false;
+	/** @var string diagnostics — head of the content AFTER do_shortcode (what it produced) */
+	private $the_content_late_sample = '';
+
+	/**
+	 * Runs after do_shortcode (priority 11). If "[section" is still present here,
+	 * do_shortcode did NOT consume the shortcodes (they aren't registered / were
+	 * removed). If it's gone but nothing stamped, the shortcodes rendered through
+	 * OLD views that don't call sc_build_wrapper_attr.
+	 *
+	 * @param string $content
+	 *
+	 * @return string
+	 * @internal
+	 */
+	public function _probe_the_content_late( $content ) {
+		if ( $this->is_frame_request() && strlen( (string) $content ) > 1000 ) {
+			$this->the_content_sc_survived = ( strpos( (string) $content, '[section' ) !== false );
+			$this->the_content_late_sample = substr( ltrim( (string) $content ), 0, 200 );
+		}
+		return $content;
+	}
+
+	/**
+	 * @param string $content
+	 *
+	 * @return string
+	 * @internal
+	 */
+	public function _probe_the_content( $content ) {
+		if ( $this->is_frame_request() ) {
+			$this->the_content_runs++;
+			$len = strlen( (string) $content );
+			$this->the_content_len += $len;
+			// Fingerprint the main (largest) blob so we can see whether the canvas got
+			// live "[section …]" shortcodes (stamps will follow) or pre-expanded HTML.
+			if ( $len > $this->the_content_max_len ) {
+				$this->the_content_max_len = $len;
+				$this->the_content_sample  = substr( ltrim( (string) $content ), 0, 200 );
+			}
+		}
+		return $content;
+	}
+
+	/**
+	 * Print the server-side render facts the debug HUD surfaces. Only in the canvas
+	 * frame. Lets us see whether the edit-render path actually ran server-side:
+	 *  - stamped > 0 but DOM has 0  → an HTML optimizer stripped data-* after render
+	 *  - stamped == 0, the_content ran → content bypassed sc_build_wrapper_attr
+	 *    (e.g. cached/pre-rendered shortcode HTML), so the filter never fired
+	 *  - the_content_runs == 0 → the theme template didn't render the_content here
+	 *
+	 * @internal
+	 */
+	public function _action_frame_server_diag() {
+		if ( ! $this->is_frame_request() ) {
+			return;
+		}
+
+		// builder_active gates whether the_posts swaps in live shortcodes (stampable)
+		// vs. the pre-rendered post_content (no shortcodes). The decisive extra fact.
+		$qpost          = get_queried_object();
+		$builder_data   = ( $qpost instanceof WP_Post ) ? fw_get_db_post_option( $qpost->ID, $this->pb()->get_option_key() ) : null;
+		$builder_active = is_array( $builder_data ) ? (bool) ( $builder_data['builder_active'] ?? false ) : null;
+		$has_json       = is_array( $builder_data ) && ! empty( $builder_data['json'] );
+
+		$sc_ext = fw_ext( 'shortcodes' );
+		$pb_ext = fw_ext( 'page-builder' );
+
+		// Where is the ACTIVE shortcodes extension actually loaded from? If a second
+		// Unyson (e.g. theme-bundled) is winning, this path won't be our plugin dir,
+		// and the [section] callback renders that other copy's (old) view.
+		$sc_path = null;
+		if ( $sc_ext && method_exists( $sc_ext, 'get_declared_path' ) ) {
+			$sc_path = $sc_ext->get_declared_path();
+		}
+		// Resolve the real file the [section] shortcode renders — the definitive proof
+		// of which copy executes.
+		$section_view = null;
+		if ( $sc_ext && method_exists( $sc_ext, 'get_shortcodes' ) ) {
+			$scs = $sc_ext->get_shortcodes();
+			if ( isset( $scs['section'] ) && method_exists( $scs['section'], 'locate_path' ) ) {
+				$section_view = $scs['section']->locate_path( '/views/view.php' );
+			}
+		}
+
+		// Stamps produced by the ACTUAL page render (capture before the probe below).
+		$render_stamped = (int) $this->stamp_count;
+
+		// Non-destructive direct test: is our stamp filter registered, and does the
+		// deployed sc_build_wrapper_attr actually run it? sc_build_wrapper_attr is a
+		// pure array-builder (no side effects), and our filter just appends an attr.
+		// probeFired=false while stampHooked=true ⇒ the deployed helper is OLDER than
+		// its version claims (missing the apply_filters('sc_build_wrapper_attr') call).
+		// Raw call counts during the ACTUAL render (capture before the probe below):
+		//  wrapperCalls = times sc_build_wrapper_attr ran at all this request.
+		//  wrapperEditCalls = of those, how many saw is_edit_render()===true.
+		// wrapperCalls==0 with content present ⇒ shortcode output is CACHED (views
+		// didn't re-execute). wrapperCalls>0 but editCalls==0 ⇒ is_edit_render was
+		// false during render (memoization/timing). editCalls>0 but stamped==0 ⇒
+		// unique_id missing from the atts passed to the helper.
+		$render_calls      = (int) $this->wrapper_attr_calls;
+		$render_edit_calls = (int) $this->wrapper_attr_edit_calls;
+
+		$stamp_hooked = false !== has_filter( 'sc_build_wrapper_attr', array( $this, '_filter_stamp_item_id' ) );
+		$probe_before = $this->stamp_count;
+		if ( function_exists( 'sc_build_wrapper_attr' ) ) {
+			sc_build_wrapper_attr( array( 'unique_id' => 'fw-le-probe', 'base_class' => 'fw-le-probe' ) );
+		}
+		$probe_fired = ( $this->stamp_count > $probe_before );
+
+		echo "\n<script>window._fwLeServerDiag=" . wp_json_encode( array(
+			'isFrameRequest'  => true,
+			'editRender'      => (bool) $this->is_edit_render(),
+			'stampHooked'     => $stamp_hooked,
+			'probeFired'      => $probe_fired,
+			'stamped'         => $render_stamped,
+			'wrapperCalls'    => $render_calls,
+			'wrapperEditCalls'=> $render_edit_calls,
+			'forcedWrappers'  => (int) $this->force_wrapper_count,
+			'theContentRuns'  => (int) $this->the_content_runs,
+			'theContentLen'   => (int) $this->the_content_len,
+			'theContentSample'=> $this->the_content_sample,
+			'theContentLate'  => $this->the_content_late_sample,
+			'scSurvived'      => (bool) $this->the_content_sc_survived,
+			'builderActive'   => $builder_active,
+			'hasBuilderJson'  => $has_json,
+			// Version / capability of the code the stamping depends on. If the helpers
+			// are missing or the extensions are old, the views won't stamp.
+			'shortcodesVer'   => $sc_ext ? $sc_ext->manifest->get_version() : null,
+			'pageBuilderVer'  => $pb_ext ? $pb_ext->manifest->get_version() : null,
+			'helperWrapper'   => function_exists( 'sc_build_wrapper_attr' ),
+			'helperNeeds'     => function_exists( 'sc_needs_wrapper' ),
+			'scSection'       => shortcode_exists( 'section' ),
+			'scTextBlock'     => shortcode_exists( 'text_block' ),
+			'theme'           => get_stylesheet(),
+			'template'        => get_page_template_slug() ?: basename( (string) get_page_template() ),
+			// OpCache: validate_timestamps=0 (common on WP Engine) ⇒ updated PHP files
+			// run STALE bytecode until OpCache is flushed. The decisive environment fact.
+			'opcacheEnabled'  => function_exists( 'opcache_get_status' ) && (bool) @ini_get( 'opcache.enable' ),
+			'opcacheValidate' => (string) @ini_get( 'opcache.validate_timestamps' ),
+			'opcacheFreq'     => (string) @ini_get( 'opcache.revalidate_freq' ),
+			'opcacheCanReset' => function_exists( 'opcache_reset' ),
+			'shortcodesPath'  => $sc_path,
+			'sectionView'     => $section_view,
+			// Does the file the section shortcode renders contain the current marker?
+			'sectionViewIsCurrent' => ( $section_view && is_readable( $section_view ) )
+				? ( strpos( (string) file_get_contents( $section_view ), 'sc_build_wrapper_attr' ) !== false )
+				: null,
+		) ) . ";</script>\n";
 	}
 
 	/**
@@ -126,7 +308,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @internal
 	 */
 	public function _filter_force_wrapper( $needs ) {
-		return $this->is_edit_render() ? true : $needs;
+		if ( $this->is_edit_render() ) {
+			$this->force_wrapper_count++;
+			return true;
+		}
+		return $needs;
 	}
 
 	/**
@@ -137,12 +323,17 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @internal
 	 */
 	public function _filter_stamp_item_id( $attr, $atts ) {
+		$this->wrapper_attr_calls++;
+
 		if ( ! $this->is_edit_render() ) {
 			return $attr;
 		}
 
+		$this->wrapper_attr_edit_calls++;
+
 		if ( ! empty( $atts['unique_id'] ) ) {
 			$attr['data-fw-item-id'] = $atts['unique_id'];
+			$this->stamp_count++;
 		}
 
 		// Visibility is driven by the responsive_hide option (the "Hide on"
@@ -161,6 +352,70 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		return $attr;
+	}
+
+	/**
+	 * View-independent stamping. Runs on `do_shortcode_tag` (the output of every
+	 * shortcode) and injects `data-fw-item-id` into the first opening tag of a
+	 * builder item's rendered HTML — so the Live Editor can select it even when the
+	 * shortcode view was overridden by the theme (framework-customizations) with a
+	 * copy that never calls sc_build_wrapper_attr.
+	 *
+	 * Nesting-safe: the "already stamped" guard inspects only the FIRST tag, so a
+	 * section whose own wrapper is unstamped still gets stamped even though its inner
+	 * (already-stamped) items appear deeper in the output. Skips when the wrapper was
+	 * already stamped by the sc_build_wrapper_attr path (plugin views), avoiding
+	 * duplicates.
+	 *
+	 * @param string $output Shortcode output HTML.
+	 * @param string $tag    Shortcode tag.
+	 * @param array|string $attr Shortcode attributes.
+	 * @param array  $m      Regex match.
+	 *
+	 * @return string
+	 * @internal
+	 */
+	public function _filter_stamp_shortcode_output( $output, $tag, $attr, $m ) {
+		if ( ! $this->is_edit_render() || ! is_string( $output ) || $output === '' ) {
+			return $output;
+		}
+
+		$uid = ( is_array( $attr ) && ! empty( $attr['unique_id'] ) ) ? (string) $attr['unique_id'] : '';
+		if ( $uid === '' ) {
+			return $output;
+		}
+
+		// Already stamped by the view? The first opening tag would carry it.
+		if ( preg_match( '/^\s*<[a-zA-Z][^>]*\bdata-fw-item-id=/', $output ) ) {
+			return $output;
+		}
+
+		$stamped = preg_replace(
+			'/<([a-zA-Z][a-zA-Z0-9-]*)/',
+			'<$1 data-fw-item-id="' . esc_attr( $uid ) . '"',
+			$output,
+			1
+		);
+
+		if ( is_string( $stamped ) && $stamped !== $output ) {
+			$this->stamp_count++;
+			// Strip the responsive_hide breakpoint classes from that same first tag so
+			// the item stays visible/selectable in the canvas (mirrors the wrapper-attr
+			// path). Only touch the first tag's class attribute.
+			$stamped = preg_replace_callback(
+				'/^(\s*<[a-zA-Z][a-zA-Z0-9-]*[^>]*\bclass=")([^"]*)(")/',
+				function ( $mm ) {
+					$cls = trim( preg_replace( '/\b(?:hide-xs|hide-sm|hide-md)\b/', '', $mm[2] ) );
+					$cls = preg_replace( '/\s+/', ' ', $cls );
+					return $mm[1] . $cls . $mm[3];
+				},
+				$stamped,
+				1
+			);
+			return $stamped;
+		}
+
+		return $output;
 	}
 
 	/**
@@ -490,6 +745,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 
 		wp_localize_script( 'fw-live-editor', '_fwLiveEditor', array(
 			'postId'   => (int) $post->ID,
+			'version'  => $this->manifest->get_version(),
+			// Auto-open the diagnostics HUD when the boot URL carries ?fw-le-debug.
+			'debug'    => (bool) FW_Request::GET( 'fw-le-debug' ),
 			'frameUrl' => $this->get_frame_url( $post ),
 			'exitUrl'  => get_permalink( $post->ID ),
 			'editUrl'  => admin_url( 'post.php?post=' . (int) $post->ID . '&action=edit' ),
@@ -506,6 +764,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'autosave'    => 'fw_live_editor_autosave',
 				'revisions'    => 'fw_live_editor_revisions',
 				'revisionGet'  => 'fw_live_editor_revision_get',
+				'opcacheFlush' => 'fw_live_editor_opcache_flush',
 			),
 			// Insertable leaf elements for the "Add" panel (drag onto the canvas).
 			'elements' => $this->get_insertable_elements(),
@@ -815,7 +1074,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		);
 
 		wp_localize_script( 'fw-live-editor-frame', '_fwLiveEditorFrame', array(
-			'postId' => (int) get_queried_object_id(),
+			'postId'  => (int) get_queried_object_id(),
+			'version' => $this->manifest->get_version(),
 			'l10n'   => array(
 				'firstSection'   => __( 'Add your first section', 'fw' ),
 				'addSectionHere' => __( 'Add Section', 'fw' ),
@@ -993,6 +1253,53 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * Flush PHP OpCache so updated plugin files actually run. On hosts with
+	 * opcache.validate_timestamps=0 (e.g. WP Engine) the disk files can be current
+	 * while PHP keeps executing stale bytecode — which makes shortcode views render
+	 * an old way that never calls the stamping helper. Prefers a full reset; falls
+	 * back to force-invalidating the Shortcodes/Page Builder PHP files.
+	 *
+	 * @internal
+	 */
+	public function _ajax_opcache_flush() {
+		$this->verify_ajax();
+
+		$out = array(
+			'getStatus'   => function_exists( 'opcache_get_status' ),
+			'canReset'    => function_exists( 'opcache_reset' ),
+			'method'      => 'none',
+			'ok'          => false,
+			'invalidated' => 0,
+		);
+
+		if ( function_exists( 'opcache_reset' ) && @opcache_reset() ) {
+			$out['method'] = 'reset';
+			$out['ok']     = true;
+		} elseif ( function_exists( 'opcache_invalidate' ) ) {
+			// Targeted, force-invalidate the Shortcodes extension tree (it nests the
+			// Page Builder) — that's where the stale view bytecode lives.
+			$dir = dirname( __DIR__ ) . '/shortcodes';
+			$count = 0;
+			if ( is_dir( $dir ) ) {
+				$it = new RecursiveIteratorIterator(
+					new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS )
+				);
+				foreach ( $it as $file ) {
+					$path = (string) $file;
+					if ( substr( $path, -4 ) === '.php' && @opcache_invalidate( $path, true ) ) {
+						$count++;
+					}
+				}
+			}
+			$out['method']      = 'invalidate';
+			$out['invalidated'] = $count;
+			$out['ok']          = $count > 0;
+		}
+
+		wp_send_json_success( $out );
 	}
 
 	/**
