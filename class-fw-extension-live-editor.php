@@ -1181,6 +1181,18 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			? $builder_row['popup_size']
 			: '';
 
+		// section / column (and any container) bypass get_shortcode_builder_data() —
+		// it bails early for non-'simple' types — so the line above yields nothing and
+		// the JS falls back to the container default (large). Those shortcodes declare
+		// their modal size in the config's `page_builder` section, so read it straight
+		// from there; now they honor their configured size (e.g. section/column = medium).
+		if ( '' === $popup_size && method_exists( $shortcode, 'get_config' ) ) {
+			$pb = $shortcode->get_config( 'page_builder' );
+			if ( is_array( $pb ) && ! empty( $pb['popup_size'] ) ) {
+				$popup_size = $pb['popup_size'];
+			}
+		}
+
 		wp_send_json_success( array(
 			'tag'        => $tag,
 			'title'      => $title,

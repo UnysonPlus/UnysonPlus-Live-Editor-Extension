@@ -905,8 +905,15 @@ body.fw-le-adding * { cursor: grabbing !important; }
 /* The WordPress media frame (icon picker / media-image fields) is built for
  * wp-admin and doesn't reliably get its fixed-overlay positioning on a front-end
  * document, so it floats off-position. Pin it as a centered overlay above the
- * options modal. */
-body.fw-live-editor-shell .media-modal {
+ * options modal.
+ *
+ * EXCLUDE the draggable options panel (.fw-modal-draggable): it positions itself
+ * via JS (fw.OptionsModal centers on open and sets inline top/left while dragging).
+ * The `inset: … !important` here overrode that inline positioning, so the panel
+ * couldn't center AND jQuery UI's drag updates were ignored (box frozen at the
+ * inset). Scoping the exclusion to the draggable wrapper leaves the wp.media
+ * picker frames (not draggable) with their centered inset. */
+body.fw-live-editor-shell :not(.fw-modal-draggable) > .media-modal {
 	position: fixed !important;
 	inset: 5vh 5vw !important;
 	/* NO z-index override here: fw.Modal sets a level-based z-index inline (a modal
@@ -922,6 +929,14 @@ body.fw-live-editor-shell .media-modal {
 body.fw-live-editor-shell .media-modal:focus,
 body.fw-live-editor-shell .media-modal:focus-within {
 	outline: none !important;
+}
+/* Put the focus shadow on .media-modal-CONTENT (which fades/scales in and out with
+ * the panel via fwGrowIn/fwGrowOut), NOT on .media-modal (the always-present box).
+ * On the box it appears before the panel grows in and lingers after it grows out —
+ * the "shadow loads first" flash. On the content it animates in lockstep. (Same
+ * reason the fw.css draggable-panel shadow lives on the content.) */
+body.fw-live-editor-shell .media-modal:focus > .media-modal-content,
+body.fw-live-editor-shell .media-modal:focus-within > .media-modal-content {
 	box-shadow: 0 12px 40px rgba( 0, 0, 0, .45 ) !important;
 }
 
@@ -948,6 +963,58 @@ body.fw-live-editor-shell .media-modal *::after {
 body.fw-live-editor-shell .wp-editor-tabs,
 body.fw-live-editor-shell .wp-editor-tabs * {
 	box-sizing: content-box;
+}
+
+/* The options form's tab/group wrappers carry a `.fw-container` class. In the
+ * shell the builder's Bootstrap grid (bootstrap-3-legacy.css) is loaded for the
+ * canvas, and its `.fw-container` rule adds a ~56px page gutter to those wrappers
+ * — so every option row is inset far more than in wp-admin (where these wrappers
+ * have 0 horizontal padding). Neutralize the gutter INSIDE the options modal so
+ * the layout matches the backend. Scoped to the modal, so the real page canvas
+ * (in the iframe) is untouched. */
+body.fw-live-editor-shell .media-modal .fw-container {
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+	/* The ACTIVE THEME also matches these wrappers in the shell with
+	 *   body .fw-container { width:100%; max-width: var(--container-max-desktop, 1170px); margin: auto }
+	 * which caps a wide (large) modal's tab/group at ~1170px and centres it (a
+	 * ~15px gap each side); wp-admin has no such rule. Neutralize the theme's
+	 * max-width + auto-centering so the option tabs fill the full modal width. */
+	max-width: none !important;
+	margin-left: 0 !important;
+	margin-right: 0 !important;
+}
+
+/* In wp-admin each option row has margin:0 and fits the modal exactly. In the
+ * shell a bleed-in grid rule gives `.fw-backend-option` a -12px side margin, so —
+ * with the container gutter zeroed above — every row becomes 24px wider than the
+ * modal and a horizontal scrollbar appears. Force margin:0 to match the backend:
+ * rows fit, no scrollbar, and the label gutter lines up (27px) like wp-admin. */
+body.fw-live-editor-shell .media-modal .fw-backend-option {
+	margin-left: 0 !important;
+	margin-right: 0 !important;
+}
+
+/* The option grid columns (.fw-col-xs-*, .fw-col-sm-*, …) that lay out the
+ * label/input pick up a ~12px Bootstrap column gutter from the builder's grid CSS
+ * in the shell; wp-admin gives them 0. That gutter insets the field content (and
+ * narrows inputs), so labels/fields don't align with the backend. Zero it inside
+ * the modal so the grid matches wp-admin. */
+body.fw-live-editor-shell .media-modal [class*="fw-col-"] {
+	padding-left: 0 !important;
+	padding-right: 0 !important;
+}
+
+/* In wp-admin, width-type-fixed fields (text, select, code editor, datetime, …)
+ * render FULL-WIDTH — the 428px cap in backend-options.css
+ *   .…-input.width-type-fixed > .fw-inner { max-width: 428px }
+ * is overridden there. In the shell that override isn't in effect, so those fields
+ * stay capped at 428px and look narrow with a big right gap. Drop the cap for
+ * width-type-fixed inputs so they fill their column like the backend. Genuinely
+ * fixed-width controls use a different class (.fw-backend-option-fixed-width),
+ * which is untouched and keeps its 428px. */
+body.fw-live-editor-shell .media-modal .fw-backend-option-input.width-type-fixed > .fw-inner {
+	max-width: none !important;
 }
 
 /* Icon picker layout fix. On the shell its single option (the icon library)
