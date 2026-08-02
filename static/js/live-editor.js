@@ -287,6 +287,7 @@
 			window.addEventListener( 'message', this.onMessage.bind( this ), false );
 			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
 			this.setupDebug();
+			this.setupWheelScroll();
 
 			// The clipboard is shared (localStorage) with the backend builder + other
 			// tabs; refresh the Paste control when it changes elsewhere.
@@ -800,17 +801,25 @@
 				'</div>'
 			).appendTo( 'body' );
 
-			var $grid = $pick.find( '.fw-le-picker__grid' );
+			// Build the width tiles (widest → narrowest). The grid is twelfths, but a
+			// column also supports the single fifth 1_5 (20%, renders as fw-col-sm-15) —
+			// it isn't a twelfth, so slot it between 1/4 (25%) and 1/6 (16.7%).
+			var tiles = [];
 			for ( var tw = 12; tw >= 1; tw-- ) {
-				var id = GRID_ID[ tw ];
-				var pct = Math.round( ( tw / 12 ) * 100 );
+				tiles.push( { id: GRID_ID[ tw ], flex: tw, pct: Math.round( ( tw / 12 ) * 100 ) } );
+				if ( tw === 3 ) { tiles.push( { id: '1_5', flex: 2.4, pct: 20 } ); }
+			}
+
+			var $grid = $pick.find( '.fw-le-picker__grid' );
+			for ( var i = 0; i < tiles.length; i++ ) {
+				var t = tiles[ i ];
 				var $tile = $(
 					'<button type="button" class="fw-le-picker__tile fw-le-coltile">' +
-						'<span class="fw-le-picker__cols"><span style="flex:' + tw + '"></span><span class="fw-le-coltile__rest" style="flex:' + ( 12 - tw ) + '"></span></span>' +
-						'<span class="fw-le-coltile__lbl">' + fracOf( id ) + '</span>' +
+						'<span class="fw-le-picker__cols"><span style="flex:' + t.flex + '"></span><span class="fw-le-coltile__rest" style="flex:' + ( 12 - t.flex ) + '"></span></span>' +
+						'<span class="fw-le-coltile__lbl">' + fracOf( t.id ) + '</span>' +
 					'</button>'
 				);
-				$tile.attr( 'data-width', id ).attr( 'title', fracOf( id ) + '  (' + pct + '%)' );
+				$tile.attr( 'data-width', t.id ).attr( 'title', fracOf( t.id ) + '  (' + t.pct + '%)' );
 				$grid.append( $tile );
 			}
 
@@ -2443,6 +2452,48 @@
 		// the canvas for its diagnostics and renders a copyable report — built for
 		// triaging "can't select anything on a live site" (cache/optimizer stripping
 		// the edit-render stamps, an id mismatch, or pointer-event interception).
+		// The shell is a front-end document (it calls wp_head/wp_footer), so the active
+		// theme's scripts load too. Agency themes often hijack the wheel (smooth-scroll
+		// / locomotive) at the document/window level, which swallows the native scroll
+		// of the shell's own scrollable UI — the options modal AND the side panels (Add
+		// / Sections / Templates / History). The wheel ends up moving nothing (or the
+		// theme's fake page scroll) instead of the panel under the cursor.
+		//
+		// Take over wheel scrolling for the WHOLE shell chrome ourselves, in the CAPTURE
+		// phase (passive:false so preventDefault sticks): walk up from the cursor to the
+		// nearest scrollable ancestor that can move in the wheel's direction, scroll it,
+		// and stop the event reaching the theme's global handler. A scroller sitting at
+		// its edge is skipped so an outer one can take over; if nothing can scroll we
+		// leave the event alone. (Wheel over the canvas iframe is a separate document, so
+		// it never reaches this handler — the frame scrolls itself.)
+		setupWheelScroll: function () {
+			window.addEventListener( 'wheel', function ( e ) {
+				var node = e.target;
+				while ( node && node.nodeType === 1 && node !== document.body ) {
+					if ( node.scrollHeight - node.clientHeight > 1 ) {
+						var oy = window.getComputedStyle( node ).overflowY;
+						if ( oy === 'auto' || oy === 'scroll' ) {
+							var atTop    = node.scrollTop <= 0;
+							var atBottom = node.scrollTop + node.clientHeight >= node.scrollHeight - 1;
+							if ( ( e.deltaY < 0 && ! atTop ) || ( e.deltaY > 0 && ! atBottom ) ) {
+								var d = e.deltaY;
+								if ( e.deltaMode === 1 ) { d *= 16; }                 // lines → px
+								else if ( e.deltaMode === 2 ) { d *= node.clientHeight; } // pages
+								node.scrollTop += d;
+								e.preventDefault();
+								e.stopImmediatePropagation();
+								return;
+							}
+							// Scrollable but pinned at its edge in this direction — let an
+							// outer scroller (if any) take it: keep walking up.
+						}
+					}
+					node = node.parentNode;
+				}
+				// Nothing scrollable under the cursor — leave the event alone.
+			}, { capture: true, passive: false } );
+		},
+
 		setupDebug: function () {
 			var self = this;
 			$( document ).on( 'keydown', function ( e ) {

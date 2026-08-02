@@ -902,6 +902,50 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 body.fw-le-adding { cursor: grabbing; }
 body.fw-le-adding * { cursor: grabbing !important; }
 
+/* The media frame runs on the FRONT END here, so it inherits the active theme's
+ * font instead of the wp-admin font stack the backend uses — which makes the
+ * media-frame-title (and its labels) render in a different font on every site.
+ * Pin it to the same family/size the backend applies. The title is an <h1>, so
+ * target it explicitly too — otherwise a theme's `h1 { font-family }` overrides
+ * the inherited value. Scoped to the shell so nothing else is affected. */
+body.fw-live-editor-shell .media-frame,
+body.fw-live-editor-shell .media-modal,
+body.fw-live-editor-shell .media-frame-title,
+body.fw-live-editor-shell .media-frame-title h1 {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+}
+body.fw-live-editor-shell .media-frame,
+body.fw-live-editor-shell .media-modal {
+	font-size: 12px;
+	-webkit-overflow-scrolling: touch;
+}
+
+/* The theme also leaks letter-spacing / text-transform / font-weight onto the modal
+ * (it runs on the front end). letter-spacing / text-transform are never used by the
+ * modal intentionally, so normalize those everywhere. */
+body.fw-live-editor-shell .media-frame,
+body.fw-live-editor-shell .media-modal,
+body.fw-live-editor-shell .media-frame *,
+body.fw-live-editor-shell .media-modal * {
+	letter-spacing: normal !important;
+	text-transform: none !important;
+}
+/* font-weight must NOT be blanket-forced — that flattens the elements the modal's own
+ * CSS styles bold (option labels are 600, active tabs, etc.). Instead normalize just
+ * the INHERITED base weight at the container, so a theme's `body { font-weight }`
+ * bleed is neutralized while each element keeps the weight backend-options.css gives
+ * it. */
+body.fw-live-editor-shell .media-frame,
+body.fw-live-editor-shell .media-modal {
+	font-weight: 400 !important;
+}
+/* The title is the one element themes restyle most aggressively (its <h1> gets the
+ * theme's heading weight); pin it to the wp-admin value. */
+body.fw-live-editor-shell .media-modal .media-frame-title,
+body.fw-live-editor-shell .media-modal .media-frame-title h1 {
+	font-weight: 600 !important;
+}
+
 /* The WordPress media frame (icon picker / media-image fields) is built for
  * wp-admin and doesn't reliably get its fixed-overlay positioning on a front-end
  * document, so it floats off-position. Pin it as a centered overlay above the

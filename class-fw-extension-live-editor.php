@@ -110,12 +110,17 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// Suppress the WP admin bar inside both the shell and the iframe — the
 			// editor provides its own toolbar and the bar only adds clutter / height.
 			add_filter( 'show_admin_bar', array( $this, '_filter_show_admin_bar' ), 99 );
-			// Diagnostics: count the_content runs in the canvas, and print a server-side
-			// probe the debug HUD reads (window._fwLeServerDiag) to tell apart "stamps
-			// never produced" from "stamps stripped after render".
-			add_filter( 'the_content', array( $this, '_probe_the_content' ), -9999 );
-			add_filter( 'the_content', array( $this, '_probe_the_content_late' ), 99 );
-			add_action( 'wp_footer', array( $this, '_action_frame_server_diag' ), 99999 );
+			// Diagnostics — only when the editor was opened with ?fw-le-debug (the flag
+			// is propagated onto the frame URL by get_frame_url()). This keeps the debug
+			// HUD's server-side probe available on demand without any per-load overhead
+			// on a normal canvas render (the file_get_contents / reflection it does are
+			// not free). The client HUD (Ctrl+Alt+D, Flush OpCache, Test render) stays
+			// available regardless.
+			if ( FW_Request::GET( 'fw-le-debug' ) ) {
+				add_filter( 'the_content', array( $this, '_probe_the_content' ), -9999 );
+				add_filter( 'the_content', array( $this, '_probe_the_content_late' ), 99 );
+				add_action( 'wp_footer', array( $this, '_action_frame_server_diag' ), 99999 );
+			}
 		}
 	}
 
@@ -521,8 +526,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// the editor toolbar) instead of the generic pencil dashicon, so it reads as
 		// our tool rather than a stock WP edit link.
 		$logo = esc_url( $this->get_declared_URI( '/static/img/unysonplus-logo.png' ) );
+		// display:inline-block !important keeps the icon inline with the label even when the
+		// active (child) theme ships a global `img { display:block }` reset — otherwise a block
+		// image drops onto its own line and wraps "Edit Live" to a second row in the 32px bar.
 		$icon = '<img src="' . $logo . '" alt="" aria-hidden="true" '
-		      . 'style="height:16px;width:auto;vertical-align:middle;margin:0 6px 0 2px;position:relative;top:-1px;" />';
+		      . 'style="display:inline-block !important;height:16px;width:auto;vertical-align:middle;margin:0 6px 0 2px;position:relative;top:-1px;" />';
 
 		$wp_admin_bar->add_node( array(
 			'id'    => 'fw-live-editor',
@@ -644,13 +652,19 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	/**
 	 * The URL loaded inside the iframe (the live canvas). Carries ONLY the frame
 	 * var — never the boot var — so the page can't recursively re-open the shell.
+	 * Propagates ?fw-le-debug so the frame request also enables the server-side
+	 * diagnostics (they're gated on that flag in _init).
 	 *
 	 * @param WP_Post $post
 	 *
 	 * @return string
 	 */
 	public function get_frame_url( WP_Post $post ) {
-		return add_query_arg( $this->frame_query_var, 1, get_permalink( $post->ID ) );
+		$url = add_query_arg( $this->frame_query_var, 1, get_permalink( $post->ID ) );
+		if ( FW_Request::GET( 'fw-le-debug' ) ) {
+			$url = add_query_arg( 'fw-le-debug', 1, $url );
+		}
+		return $url;
 	}
 
 	/* ---------------------------------------------------------------------

@@ -57,6 +57,70 @@
 		icon_box:        'Icon Box'
 	};
 
+	// Multi-text elements: which parts expose inline (double-click) editing, and the
+	// att each writes back to. `editSel` (optional) = a child within the matched
+	// element to actually edit (e.g. the overline's label span, so its marker
+	// pseudo-elements aren't captured into innerHTML). Array order = fallback priority
+	// when a double-click lands between the specific parts.
+	var INLINE_PARTS = {
+		special_heading: [
+			{ sel: '.heading-title',    att: 'title' },
+			{ sel: '.heading-overline', att: 'overline', editSel: '.heading-overline__label' },
+			{ sel: '.heading-subtitle', att: 'subtitle' }
+		],
+		icon_box: [
+			{ sel: '.icon-box__title',   att: 'title' },
+			{ sel: '.icon-box__content', att: 'content' }
+		],
+		icon: [
+			{ sel: '.list-title', att: 'title' }
+		],
+		blockquote: [
+			{ sel: '.fw-bq__text',   att: 'quote' },
+			// author may be wrapped in a link (source_url) — edit the <a> text so its
+			// href is preserved; falls back to the span when there's no link.
+			{ sel: '.fw-bq__author', att: 'author', editSel: 'a' },
+			{ sel: '.fw-bq__role',   att: 'role' }
+		],
+		notification: [
+			// The view now wraps the message in .alert__message in every layout; the
+			// label is a <strong> (.alert__label when stacked, a direct child otherwise).
+			{ sel: '.alert__message',                att: 'message' },
+			{ sel: '.alert__label, .alert > strong', att: 'label' }
+		],
+		highlight_text: [
+			{ sel: '.fw-hl__text',   att: 'text' },
+			{ sel: '.fw-hl__prefix', att: 'prefix' },
+			{ sel: '.fw-hl__suffix', att: 'suffix' }
+		],
+		badge: [
+			{ sel: '.ap-pill__msg', att: 'message' },
+			{ sel: '.ap-pill__tag', att: 'tag_text' }
+		],
+		call_to_action: [
+			{ sel: '.fw-action-content h2', att: 'title' },        // h2 has no fixed class
+			{ sel: '.fw-action-message',    att: 'message' },
+			{ sel: '.fw-action-btn span',   att: 'button_label' }
+		],
+		// name h3 / job span have no fixed class — scope by their container.
+		team_member: [
+			{ sel: '.fw-team-name h3',   att: 'name' },
+			{ sel: '.fw-team-name span', att: 'job' },
+			{ sel: '.fw-team-text p',    att: 'desc' }
+		]
+		// Intentionally NOT here (content edited via the options panel):
+		//  - text-expander: visible/hidden content is tokenised + woven with the toggle.
+		//  - flip-box: the back face is hidden until flipped + faces carry flip buttons,
+		//    so inline editing is a poor fit.
+	};
+	// Legacy tag: 'badge' was 'announcement_pill' before the rename — same markup.
+	INLINE_PARTS.announcement_pill = INLINE_PARTS.badge;
+
+	// Shortcodes whose inline editing must NOT use the nearest-part fallback (it would
+	// mis-target). team-member: has a photo area — a double-click there shouldn't fall
+	// back to editing the name.
+	var INLINE_STRICT = { team_member: true };
+
 	function titleize( slug ) {
 		return String( slug || 'Element' )
 			.replace( /[_-]+/g, ' ' )
@@ -442,40 +506,47 @@
 			if ( ! meta ) { return; }
 
 			if ( meta.shortcode === 'text_block' ) {
-				this.enterInlineEdit( hit.el, hit.id ); // inline contenteditable
-			} else if ( meta.shortcode === 'special_heading' ) {
-				// Each visible line (overline / title / subtitle) maps to its own att;
-				// edit just the clicked line in place.
-				var part = this.headingPartFrom( e.target, hit.el );
+				this.enterInlineEdit( hit.el, hit.id ); // whole element = one text att
+			} else if ( INLINE_PARTS[ meta.shortcode ] ) {
+				// Multi-text elements: edit just the part the double-click landed on.
+				// `strict` disables the nearest-part fallback (used where a fallback
+				// could mis-target — e.g. notification's bare-text default message).
+				var part = this.partFrom( e.target, hit.el, INLINE_PARTS[ meta.shortcode ], INLINE_STRICT[ meta.shortcode ] );
 				if ( part ) { this.enterInlineEdit( part.el, hit.id, part.att, hit.el ); }
 			} else if ( meta.shortcode === 'media_image' ) {
 				this.toShell( 'edit-image', { id: hit.id } ); // open the media picker
 			}
 		},
 
-		// Resolve which Special Heading line a double-click landed on, plus the att it
-		// writes back to. The overline text lives inside the __label span (its line div
-		// also carries marker pseudo-elements we must not capture in innerHTML); the
-		// title and subtitle are edited on their own elements. Falls back to the title
-		// (then the first present line) when the click missed a specific line.
-		headingPartFrom: function ( target, root ) {
-			var node = target;
+		// Resolve which text part a double-click landed on (see INLINE_PARTS). Walks up
+		// from the click target to the item root, matching each part's selector. Unless
+		// `strict`, it also falls back to the first present part when the click missed a
+		// specific one (nice for headings; wrong where a bare-text field has no element).
+		partFrom: function ( target, root, parts, strict ) {
+			var node = target, i, found;
 			while ( node && node !== root.parentNode ) {
 				if ( node.matches ) {
-					if ( node.matches( '.heading-overline' ) ) {
-						return { el: node.querySelector( '.heading-overline__label' ) || node, att: 'overline' };
+					for ( i = 0; i < parts.length; i++ ) {
+						if ( node.matches( parts[ i ].sel ) ) {
+							return {
+								el:  parts[ i ].editSel ? ( node.querySelector( parts[ i ].editSel ) || node ) : node,
+								att: parts[ i ].att
+							};
+						}
 					}
-					if ( node.matches( '.heading-title' ) )    { return { el: node, att: 'title' }; }
-					if ( node.matches( '.heading-subtitle' ) ) { return { el: node, att: 'subtitle' }; }
 				}
 				node = node.parentNode;
 			}
-			var t = root.querySelector( '.heading-title' );
-			if ( t ) { return { el: t, att: 'title' }; }
-			var o = root.querySelector( '.heading-overline__label' );
-			if ( o ) { return { el: o, att: 'overline' }; }
-			var s = root.querySelector( '.heading-subtitle' );
-			if ( s ) { return { el: s, att: 'subtitle' }; }
+			if ( strict ) { return null; }
+			for ( i = 0; i < parts.length; i++ ) {
+				found = root.querySelector( parts[ i ].sel );
+				if ( found ) {
+					return {
+						el:  parts[ i ].editSel ? ( found.querySelector( parts[ i ].editSel ) || found ) : found,
+						att: parts[ i ].att
+					};
+				}
+			}
 			return null;
 		},
 
