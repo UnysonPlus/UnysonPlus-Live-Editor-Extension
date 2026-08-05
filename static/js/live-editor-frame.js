@@ -107,6 +107,12 @@
 			{ sel: '.fw-team-name h3',   att: 'name' },
 			{ sel: '.fw-team-name span', att: 'job' },
 			{ sel: '.fw-team-text p',    att: 'desc' }
+		],
+		author_box: [
+			// name may be a link to the author archive — edit the <a> text (keep href).
+			{ sel: '.fw-ab__name', att: 'name', editSel: 'a' },
+			{ sel: '.fw-ab__role', att: 'role' },
+			{ sel: '.fw-ab__bio',  att: 'bio' }
 		]
 		// Intentionally NOT here (content edited via the options panel):
 		//  - text-expander: visible/hidden content is tokenised + woven with the toggle.
@@ -119,7 +125,7 @@
 	// Shortcodes whose inline editing must NOT use the nearest-part fallback (it would
 	// mis-target). team-member: has a photo area — a double-click there shouldn't fall
 	// back to editing the name.
-	var INLINE_STRICT = { team_member: true };
+	var INLINE_STRICT = { team_member: true, author_box: true };
 
 	function titleize( slug ) {
 		return String( slug || 'Element' )
@@ -129,6 +135,7 @@
 
 	function labelFor( item ) {
 		if ( ! item ) { return 'Element'; }
+		if ( item.atts && typeof item.atts._le_label === 'string' && item.atts._le_label.trim() ) { return item.atts._le_label.trim(); }
 		var t = item.type;
 		if ( t === 'column' ) { return 'Column'; }
 		if ( t === 'row' ) { return 'Row'; }
@@ -340,6 +347,10 @@
 				this.reposition();
 			} else if ( data.type === 'select-item' ) {
 				this.focusItem( data.payload && data.payload.id, ! data.payload || data.payload.scroll !== false );
+			} else if ( data.type === 'hover-item' ) {
+				this.hoverFromShell( data.payload && data.payload.id );
+			} else if ( data.type === 'apply-hidden' ) {
+				this.applyHiddenMark( data.payload && data.payload.id );
 			} else if ( data.type === 'move-section' ) {
 				this.moveSection( data.payload );
 			} else if ( data.type === 'add-dragover' ) {
@@ -1132,24 +1143,65 @@
 
 		/** Move a section element to sit before `beforeId` (or to the end, before the
 		 *  add-section zone) — the DOM half of a navigator reorder. */
+		/** Core FLIP: for each [el, oldRect] pair, animate from its old box to where it
+		 *  sits now (call AFTER the DOM has moved). Gives the smooth slide-into-place. */
+		_flipRun: function ( pairs ) {
+			for ( var i = 0; i < pairs.length; i++ ) {
+				var el = pairs[ i ][ 0 ], r = pairs[ i ][ 1 ], nr = el.getBoundingClientRect();
+				var dx = r.left - nr.left, dy = r.top - nr.top;
+				if ( ! dx && ! dy ) { continue; }
+				el.style.transition = 'none';
+				el.style.transform  = 'translate(' + dx + 'px,' + dy + 'px)';
+				void el.offsetWidth;                 // commit the start position
+				el.style.transition = 'transform .24s cubic-bezier( .2, .7, .3, 1 )';
+				el.style.transform  = '';
+				( function ( n ) {
+					var clear = function () { n.style.transition = ''; n.style.transform = ''; n.removeEventListener( 'transitionend', clear ); };
+					n.addEventListener( 'transitionend', clear );
+				} )( el );
+			}
+		},
+
+		/** FLIP a same-parent reorder: snapshot each child's box, run the move, animate. */
+		flipSiblings: function ( parent, doMove ) {
+			if ( ! parent ) { doMove(); return; }
+			var kids = Array.prototype.slice.call( parent.children );
+			var pairs = kids.map( function ( k ) { return [ k, k.getBoundingClientRect() ]; } );
+			doMove();
+			this._flipRun( pairs );
+		},
+
+		/** FLIP after a subtree re-render: match new stamped nodes to their pre-swap boxes. */
+		flipFromRects: function ( root, pre ) {
+			var nodes = root.querySelectorAll( '[data-fw-item-id]' ), pairs = [];
+			for ( var i = 0; i < nodes.length; i++ ) {
+				var r = pre[ nodes[ i ].getAttribute( 'data-fw-item-id' ) ];
+				if ( r ) { pairs.push( [ nodes[ i ], r ] ); }
+			}
+			this._flipRun( pairs );
+		},
+
 		moveSection: function ( payload ) {
 			if ( ! payload || ! payload.id ) { return; }
 			var el = document.querySelector( '[data-fw-item-id="' + payload.id + '"]' );
 			if ( ! el ) { return; }
-
 			var ref = payload.beforeId ? document.querySelector( '[data-fw-item-id="' + payload.beforeId + '"]' ) : null;
-			if ( ref && ref.parentNode ) {
-				ref.parentNode.insertBefore( el, ref );
-			} else {
-				var container = this.findSectionsContainer();
-				if ( container ) {
-					if ( this.els.addZone && this.els.addZone.parentNode === container ) {
-						container.insertBefore( el, this.els.addZone );
-					} else {
-						container.appendChild( el );
+			var self = this;
+			var parent = ( ref && ref.parentNode ) ? ref.parentNode : this.findSectionsContainer();
+			this.flipSiblings( parent, function () {
+				if ( ref && ref.parentNode ) {
+					ref.parentNode.insertBefore( el, ref );
+				} else {
+					var container = self.findSectionsContainer();
+					if ( container ) {
+						if ( self.els.addZone && self.els.addZone.parentNode === container ) {
+							container.insertBefore( el, self.els.addZone );
+						} else {
+							container.appendChild( el );
+						}
 					}
 				}
-			}
+			} );
 			this.ensureAddSectionZone();
 			if ( this.activeId === payload.id ) { this.reposition(); }
 		},
@@ -1509,7 +1561,19 @@
 			var nu = tmp.firstElementChild;
 			if ( ! nu ) { this.log( 'replace: empty html' ); return; }
 
+			// FLIP: remember where every stamped descendant sits, to slide them from their
+			// old spot to the new one after the swap (smooth navigator reorder).
+			var _pre = null;
+			if ( payload.animate ) {
+				_pre = {};
+				var _olds = old.querySelectorAll( '[data-fw-item-id]' );
+				for ( var _i = 0; _i < _olds.length; _i++ ) {
+					_pre[ _olds[ _i ].getAttribute( 'data-fw-item-id' ) ] = _olds[ _i ].getBoundingClientRect();
+				}
+			}
+
 			old.parentNode.replaceChild( nu, old );
+			if ( _pre ) { this.flipFromRects( nu, _pre ); }
 			this.ensureSelectable( nu );
 			this.markEmptyColumns();
 			this.ensureSectionAddColZones();
@@ -1524,7 +1588,7 @@
 				var target = document.querySelector( '[data-fw-item-id="' + payload.selectId + '"]' );
 				if ( target ) {
 					this.select( target, payload.selectId );
-					target.scrollIntoView( { behavior: 'smooth', block: 'center' } );
+					if ( ! payload.animate ) { target.scrollIntoView( { behavior: 'smooth', block: 'center' } ); }
 					return;
 				}
 			}
@@ -1550,6 +1614,7 @@
 						shortcode: it.shortcode,
 						label:     labelFor( it ),
 						parentId:  parentId,
+						locked:    !! ( it.atts && it.atts._le_locked ),
 						// Per-device "Hide on" map ({ 'hide-md': true, … }) — drives
 						// the eye state + canvas dimming for the previewed device.
 						responsiveHide: ( it.atts && it.atts.responsive_hide && typeof it.atts.responsive_hide === 'object' )
@@ -1747,7 +1812,7 @@
 			while ( node && node !== document.body ) {
 				if ( node.nodeType === 1 && node.hasAttribute && node.hasAttribute( 'data-fw-item-id' ) ) {
 					var id = node.getAttribute( 'data-fw-item-id' );
-					if ( this.index[ id ] ) { return { el: node, id: id }; }
+					if ( this.index[ id ] && ! this.index[ id ].locked ) { return { el: node, id: id }; }
 				}
 				node = node.parentNode;
 			}
@@ -1756,8 +1821,18 @@
 
 		/* ---- selection / hover ----------------------------------------- */
 
+		/** Highlight an element because the Structure tree row is hovered (shell-driven).
+		 *  Deliberately does NOT call toShell, so it can't feed back into the tree. */
+		hoverFromShell: function ( id ) {
+			var el = id ? document.querySelector( '[data-fw-item-id="' + id + '"]' ) : null;
+			if ( ! el || el === this.activeEl ) { this.els.hoverBox.style.display = 'none'; return; }
+			this.hoverEl = el;
+			this.placeBox( this.els.hoverBox, el );
+		},
+
 		setHover: function ( el ) {
 			this.hoverEl = el;
+			this.toShell( 'hover-item', { id: el ? el.getAttribute( 'data-fw-item-id' ) : null } );
 			if ( ! el || el === this.activeEl ) {
 				this.els.hoverBox.style.display = 'none';
 				return;

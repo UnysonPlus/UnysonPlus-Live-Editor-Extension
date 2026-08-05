@@ -61,6 +61,7 @@
 
 	function labelFor( node ) {
 		if ( ! node ) { return 'Element'; }
+		if ( node.atts && typeof node.atts._le_label === 'string' && node.atts._le_label.trim() ) { return node.atts._le_label.trim(); }
 		var t = node.type;
 		if ( t === 'column' ) { return 'Column'; }
 		if ( t === 'row' ) { return 'Row'; }
@@ -477,6 +478,9 @@
 				case 'save-template-request':
 					this.saveItemAsTemplate( data.payload && data.payload.id );
 					break;
+				case 'hover-item':
+					this.highlightHoverRow( data.payload && data.payload.id );
+					break;
 				case 'toggle-hidden':
 					this.setItemHidden( data.payload );
 					break;
@@ -520,6 +524,7 @@
 			).prependTo( '#fw-le-toolbar .fw-le-toolbar__group--left' );
 			this.$.addBtn.on( 'click', function () {
 				var open = ! $( 'body' ).hasClass( 'fw-le-panel-open' );
+				self.setAddTarget( null );
 				$( 'body' ).removeClass( 'fw-le-nav-open fw-le-tpl-open fw-le-history-open' ).toggleClass( 'fw-le-panel-open', open );
 			} );
 			// Section structure picker stays available — reached from the in-canvas
@@ -527,11 +532,12 @@
 			// toolbar button competing with the "Sections" navigator below.
 			this.buildStructurePicker();
 
-			// "Sections" — a navigator panel listing every section: click to jump,
-			// drag to reorder, double-click to rename (invaluable on long pages).
+			// "Structure" — a nested navigator tree of the whole page (section → column
+			// → element): click any node to select it, expand/collapse, drag sections to
+			// reorder, double-click a section to rename (invaluable on long pages).
 			this.$.navBtn = $(
 				'<button type="button" id="fw-le-nav-btn" class="fw-le-btn fw-le-btn--ghost">' +
-					'<span class="dashicons dashicons-menu-alt"></span> ' + ( ( cfg.l10n && cfg.l10n.navigator ) || 'Sections' ) +
+					'<span class="dashicons dashicons-editor-ul"></span> ' + ( ( cfg.l10n && cfg.l10n.navigator ) || 'Structure' ) +
 				'</button>'
 			).insertAfter( this.$.addBtn );
 			this.$.navBtn.on( 'click', function () {
@@ -607,13 +613,20 @@
 							if ( e.button !== 0 ) { return; }
 							self.startPanelDrag( info, e );
 						} );
+						$tile[ 0 ].addEventListener( 'click', function () {
+							if ( self._addTarget ) {
+								self.addElement( { tag: info.tag, targetParentId: self._addTarget } );
+								self.setAddTarget( null );
+								$( 'body' ).removeClass( 'fw-le-panel-open' );
+							}
+						} );
 					} )( { tag: el.tag, title: el.title } );
 					$tiles.append( $tile );
 				} );
 				$body.append( $grp );
 			} );
 
-			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-panel-open' ); } );
+			$panel.find( '.fw-le-panel__close' ).on( 'click', function () { self.setAddTarget( null ); $( 'body' ).removeClass( 'fw-le-panel-open' ); } );
 			$panel.find( '.fw-le-panel__search input' ).on( 'input', function () {
 				var q = this.value.toLowerCase();
 				$panel.find( '.fw-le-tile' ).each( function () {
@@ -878,38 +891,452 @@
 			var l10n = cfg.l10n || {};
 			var $nav = this.$.nav = $(
 				'<aside id="fw-le-nav">' +
-					'<div class="fw-le-panel__head"><strong>' + ( l10n.navigator || 'Sections' ) + '</strong>' +
+					'<div class="fw-le-panel__head"><strong>' + ( l10n.navigator || 'Structure' ) + '</strong>' +
+						'<span class="fw-le-nav__tools">' +
+							'<button type="button" class="fw-le-nav__collapse-all dashicons dashicons-editor-contract" title="Collapse all" aria-label="Collapse all"></button>' +
+						'</span>' +
 						'<button type="button" class="fw-le-panel__close" aria-label="Close">&times;</button></div>' +
-					'<div class="fw-le-nav__body"></div>' +
+					'<div class="fw-le-nav__search">' +
+				'<span class="dashicons dashicons-search"></span>' +
+				'<input type="text" placeholder="Filter\u2026" aria-label="Filter structure" />' +
+			'</div>' +
+			'<div class="fw-le-nav__body"></div>' +
 				'</aside>'
 			).appendTo( '#fw-live-editor-app' );
 
 			$nav.find( '.fw-le-panel__close' ).on( 'click', function () { $( 'body' ).removeClass( 'fw-le-nav-open' ); } );
+			$nav.attr( 'tabindex', '-1' );
+			if ( ! this._treeKeysBound ) { this._treeKeysBound = true; document.addEventListener( 'keydown', this.onTreeKeydown.bind( this ) ); }
 
 			var $body = $nav.find( '.fw-le-nav__body' );
 
-			// Click a row → jump to that section in the canvas.
-			$body.on( 'click', '.fw-le-nav__item', function ( e ) {
-				if ( e.target.closest( '.fw-le-nav__grip' ) || e.target.closest( '.fw-le-nav__rename' ) ) { return; }
-				self.toFrame( 'select-item', { id: this.getAttribute( 'data-id' ) } );
+			// Filter the tree by label as you type.
+			$nav.find( '.fw-le-nav__search input' ).on( 'input', function () {
+				self._navFilter = this.value || '';
+				self.filterTree( self._navFilter );
 			} );
 
-			// Double-click the label → rename the section (writes its CSS ID, which
-			// the section view renders as a normalized HTML id/anchor).
-			$body.on( 'dblclick', '.fw-le-nav__label', function ( e ) {
+			// Collapse-all toggle in the header: if anything is open, collapse every
+			// node that has children; if all are already collapsed, expand them again.
+			$nav.find( '.fw-le-nav__collapse-all' ).on( 'click', function () {
+				var $nodes = $body.find( '.fw-le-tree__node' ).filter( function () {
+					return !! this.querySelector( ':scope > .fw-le-tree__children' );
+				} );
+				var anyOpen = $nodes.filter( function () { return ! this.classList.contains( 'is-collapsed' ); } ).length > 0;
+				$nodes.toggleClass( 'is-collapsed', anyOpen );
+				this.classList.toggle( 'is-expanded', ! anyOpen );
+				this.title = anyOpen ? 'Expand all' : 'Collapse all';
+			} );
+
+			// Click a row → select that item (section / column / element) in the canvas.
+			$body.on( 'click', '.fw-le-tree__row', function ( e ) {
+				if ( e.target.closest( '.fw-le-tree__toggle' ) || e.target.closest( '.fw-le-tree__tail' ) || e.target.closest( '.fw-le-nav__rename' ) ) { return; }
+				var node = this.closest( '.fw-le-tree__node' );
+				if ( ! node ) { return; }
+				var cid = node.getAttribute( 'data-id' );
+				if ( e.shiftKey && self._selAnchor ) { self.treeSelectRange( self._selAnchor, cid ); }
+				else if ( e.ctrlKey || e.metaKey ) { self.treeToggleMulti( cid ); }
+				else { self._selAnchor = cid; self.selectedIds = [ cid ]; self.toFrame( 'select-item', { id: cid } ); }
+			} );
+
+			// Expand / collapse a node's children.
+			$body.on( 'click', '.fw-le-tree__toggle', function ( e ) {
 				e.stopPropagation();
-				self.renameSection( this.closest( '.fw-le-nav__item' ), this );
+				var node = this.closest( '.fw-le-tree__node' );
+				if ( node && ! this.classList.contains( 'fw-le-tree__toggle--leaf' ) ) { node.classList.toggle( 'is-collapsed' ); }
 			} );
 
-			// Pointer-based reorder from the grip (HTML5 DnD proved unreliable here).
-			$body.on( 'pointerdown', '.fw-le-nav__grip', function ( e ) {
-				e.preventDefault();
-				self.startNavDrag( this.closest( '.fw-le-nav__item' ), this, e );
+			// Double-click a SECTION label → rename it (writes its CSS ID, which the
+			// section view emits as a normalized HTML id/anchor).
+			$body.on( 'dblclick', '.fw-le-tree__node--section > .fw-le-tree__row .fw-le-tree__label', function ( e ) {
+				e.stopPropagation();
+				self.renameSection( this.closest( '.fw-le-tree__node' ), this );
 			} );
+
+			// Double-click any OTHER node's label → set a custom display name.
+			$body.on( 'dblclick', '.fw-le-tree__node:not(.fw-le-tree__node--section) > .fw-le-tree__row .fw-le-tree__label', function ( e ) {
+				e.stopPropagation();
+				self.startTreeRename( this.closest( '.fw-le-tree__node' ) );
+			} );
+
+			// Pointer drag from the grip reorders a node among its siblings.
+			$body.on( 'pointerdown', '.fw-le-tree__grip', function ( e ) {
+				e.preventDefault();
+				self.startNavDrag( this.closest( '.fw-le-tree__node' ), this, e );
+			} );
+
+			// Right-click a row → context menu (copy / paste / duplicate / delete).
+			$body.on( 'contextmenu', '.fw-le-tree__row', function ( e ) {
+				e.preventDefault();
+				var node = this.closest( '.fw-le-tree__node' );
+				if ( node ) { self.openTreeMenu( node.getAttribute( 'data-id' ), e.clientX, e.clientY ); }
+			} );
+
+			// Hover a tree row → outline that element on the canvas (and vice-versa).
+			$body.on( 'mouseenter', '.fw-le-tree__row', function () {
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( n ) { self.toFrame( 'hover-item', { id: n.getAttribute( 'data-id' ) } ); }
+			} );
+			$body.on( 'mouseleave', '.fw-le-tree__row', function () {
+				self.toFrame( 'hover-item', { id: null } );
+			} );
+
+			// Hover quick-actions: visibility / duplicate / delete.
+			$body.on( 'click', '.fw-le-tree__act--vis', function ( e ) {
+				e.stopPropagation();
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( n ) { self.toggleNodeVisibility( n.getAttribute( 'data-id' ) ); }
+			} );
+
+			$body.on( 'click', '.fw-le-tree__act--lock', function ( e ) {
+				e.stopPropagation();
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( n ) { self.toggleNodeLock( n.getAttribute( 'data-id' ) ); }
+			} );
+
+			// "+" on a column → open the Add panel targeted at that column.
+			$body.on( 'click', '.fw-le-tree__act--add', function ( e ) {
+				e.stopPropagation();
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( n ) { self.addChildTo( n.getAttribute( 'data-id' ) ); }
+			} );
+			$body.on( 'click', '.fw-le-tree__act--dup', function ( e ) {
+				e.stopPropagation();
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( n ) { self.duplicateItem( n.getAttribute( 'data-id' ) ); }
+			} );
+			$body.on( 'click', '.fw-le-tree__act--del', function ( e ) {
+				e.stopPropagation();
+				var n = this.closest( '.fw-le-tree__node' );
+				if ( ! n ) { return; }
+				var id = n.getAttribute( 'data-id' );
+				self.confirmDelete( { id: id, label: labelFor( self.index[ id ] ? self.index[ id ].node : null ) } );
+			} );
+		},
+
+		/** Is a node locked (excluded from canvas select/edit + tree drag)? */
+		isNodeLocked: function ( node ) {
+			return !! ( node && node.atts && node.atts._le_locked );
+		},
+
+		/** Toggle a node's lock — persists on the item (atts._le_locked) and re-syncs
+		 *  the frame so the canvas stops selecting it. */
+		toggleNodeLock: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			if ( ! node.atts ) { node.atts = {}; }
+			var want = ! this.isNodeLocked( node );
+			this.recordHistory();
+			if ( want ) { node.atts._le_locked = true; } else { delete node.atts._le_locked; }
+			this.markDirty();
+			this.syncFrameModel();
+			this.refreshNavigator();
+		},
+
+		/** Is a node hidden on the currently-previewed device? (responsive_hide map). */
+		isNodeHidden: function ( node ) {
+			if ( ! node || ! node.atts ) { return false; }
+			var rh = node.atts.responsive_hide;
+			if ( ! rh || Array.isArray( rh ) || typeof rh !== 'object' ) { return false; }
+			var cls = DEVICE_HIDE[ this.device || 'desktop' ] || DEVICE_HIDE.desktop;
+			return !! rh[ cls ];
+		},
+
+		/** Toggle a node's visibility on the current device from the tree — persists via
+		 *  the standard responsive_hide option and dims the canvas element. */
+		toggleNodeVisibility: function ( id ) {
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			var want = ! this.isNodeHidden( node );
+			this.setItemHidden( { id: id, device: this.device || 'desktop', hidden: want } );
+			this.toFrame( 'apply-hidden', { id: id } );
+			var row = this.$.nav && this.$.nav[ 0 ].querySelector( '.fw-le-tree__node[data-id="' + id + '"]' );
+			if ( row ) {
+				row.classList.toggle( 'is-hidden', want );
+				var eye = row.querySelector( '.fw-le-tree__act--vis' );
+				if ( eye ) {
+					eye.classList.toggle( 'dashicons-hidden', want );
+					eye.classList.toggle( 'dashicons-visibility', ! want );
+					eye.title = want ? 'Show' : 'Hide';
+				}
+			}
+		},
+
+		/** Keyboard nav for the Structure tree (arrows / Enter / Delete). Active only
+		 *  while the panel is open and focus isn't in a field. */
+		/** Rename a tree node: sections keep their CSS-ID semantics; every other node
+		 *  gets an optional custom display label stored on the item (atts._le_label). */
+		/** Point the Add panel at a specific container so the next picked element lands
+		 *  inside it; updates the panel title. Pass null to clear. */
+		setAddTarget: function ( id ) {
+			this._addTarget = id || null;
+			var panel = document.getElementById( 'fw-le-panel' );
+			if ( ! panel ) { return; }
+			panel.classList.toggle( 'is-targeting', !! this._addTarget );
+			var head = panel.querySelector( '.fw-le-panel__head strong' );
+			if ( head ) {
+				head.textContent = this._addTarget
+					? ( 'Add to ' + labelFor( this.nodeOf( this._addTarget ) ) )
+					: ( ( cfg.l10n && cfg.l10n.addElement ) || 'Add Element' );
+			}
+		},
+
+		/** "+" on a column row: open the Add panel aimed at that column. */
+		addChildTo: function ( parentId ) {
+			if ( ! parentId ) { return; }
+			$( 'body' ).removeClass( 'fw-le-nav-open fw-le-tpl-open fw-le-history-open' ).addClass( 'fw-le-panel-open' );
+			this.setAddTarget( parentId );
+		},
+
+		startTreeRename: function ( nodeEl ) {
+			if ( ! nodeEl ) { return; }
+			var labelEl = nodeEl.querySelector( ':scope > .fw-le-tree__row > .fw-le-tree__label' );
+			if ( ! labelEl ) { return; }
+			if ( nodeEl.classList.contains( 'fw-le-tree__node--section' ) ) { this.renameSection( nodeEl, labelEl ); }
+			else { this.renameNode( nodeEl, labelEl ); }
+		},
+
+		renameNode: function ( nodeEl, labelEl ) {
+			var id = nodeEl.getAttribute( 'data-id' );
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			var self = this;
+			var current = ( node.atts && typeof node.atts._le_label === 'string' ) ? node.atts._le_label : '';
+			var $input = $( '<input type="text" class="fw-le-nav__rename" />' ).val( current ).attr( 'placeholder', 'Custom name\u2026' );
+			$( labelEl ).replaceWith( $input );
+			$input.trigger( 'focus' ).trigger( 'select' );
+			var done = false;
+			var commit = function ( save ) {
+				if ( done ) { return; }
+				done = true;
+				if ( save ) {
+					var val = $.trim( $input.val() );
+					if ( ! node.atts ) { node.atts = {}; }
+					var cur = ( typeof node.atts._le_label === 'string' ) ? node.atts._le_label : '';
+					if ( cur !== val ) {
+						self.recordHistory();
+						if ( val ) { node.atts._le_label = val; } else { delete node.atts._le_label; }
+						self.markDirty();
+						self.rebuildIndex();
+						self.syncFrameModel();
+					}
+				}
+				self.refreshNavigator();
+			};
+			$input.on( 'blur', function () { commit( true ); } );
+			$input.on( 'keydown', function ( ev ) {
+				if ( ev.key === 'Enter' ) { ev.preventDefault(); commit( true ); }
+				else if ( ev.key === 'Escape' ) { ev.preventDefault(); commit( false ); }
+			} );
+		},
+
+		onTreeKeydown: function ( e ) {
+			if ( ! document.body.classList.contains( 'fw-le-nav-open' ) ) { return; }
+			var t = e.target, tag = t && t.tagName;
+			if ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) ) { return; }
+			var key = e.key, id = this.selectedId;
+			if ( key === 'ArrowDown' || key === 'ArrowUp' ) {
+				e.preventDefault(); this.moveTreeSelection( key === 'ArrowDown' ? 1 : -1 );
+			} else if ( key === 'ArrowRight' ) {
+				e.preventDefault(); this.treeExpandOrInto( id, true );
+			} else if ( key === 'ArrowLeft' ) {
+				e.preventDefault(); this.treeExpandOrInto( id, false );
+			} else if ( key === 'Enter' ) {
+				var n = id && this._treeNodeEl( id );
+				if ( n && this.startTreeRename ) { e.preventDefault(); this.startTreeRename( n ); }
+			} else if ( key === 'Delete' || key === 'Backspace' ) {
+				if ( id ) { e.preventDefault(); this.bulkDelete(); }
+			}
+		},
+
+		_treeNodeEl: function ( id ) {
+			if ( ! this.$.nav ) { return null; }
+			return this.$.nav[ 0 ].querySelector( '.fw-le-tree__node[data-id="' + id + '"]' );
+		},
+
+		/** Visible (not collapsed / not filtered-out) tree nodes, top-to-bottom. */
+		_visibleTreeNodes: function () {
+			if ( ! this.$.nav ) { return []; }
+			var body = this.$.nav[ 0 ].querySelector( '.fw-le-nav__body' );
+			if ( ! body ) { return []; }
+			return Array.prototype.filter.call( body.querySelectorAll( '.fw-le-tree__node' ), function ( n ) {
+				var r = n.querySelector( ':scope > .fw-le-tree__row' );
+				return r && r.offsetParent !== null && n.style.display !== 'none';
+			} );
+		},
+
+		moveTreeSelection: function ( dir ) {
+			var rows = this._visibleTreeNodes();
+			if ( ! rows.length ) { return; }
+			var idx = -1;
+			for ( var i = 0; i < rows.length; i++ ) { if ( rows[ i ].getAttribute( 'data-id' ) === this.selectedId ) { idx = i; break; } }
+			var next = idx < 0 ? 0 : Math.max( 0, Math.min( rows.length - 1, idx + dir ) );
+			var nid = rows[ next ].getAttribute( 'data-id' );
+			if ( nid ) { this.toFrame( 'select-item', { id: nid } ); }
+		},
+
+		/** Right arrow: expand a collapsed node, else dive to its first child. Left
+		 *  arrow: collapse an open node, else climb to its parent. */
+		treeExpandOrInto: function ( id, into ) {
+			var n = id && this._treeNodeEl( id );
+			if ( ! n ) { return; }
+			var kids = n.querySelector( ':scope > .fw-le-tree__children' );
+			var collapsed = n.classList.contains( 'is-collapsed' );
+			if ( into ) {
+				if ( kids && collapsed ) { n.classList.remove( 'is-collapsed' ); return; }
+				var first = kids && kids.querySelector( ':scope > .fw-le-tree__node' );
+				if ( first ) { this.toFrame( 'select-item', { id: first.getAttribute( 'data-id' ) } ); }
+			} else {
+				if ( kids && ! collapsed ) { n.classList.add( 'is-collapsed' ); return; }
+				var parent = n.parentNode && n.parentNode.closest( '.fw-le-tree__node' );
+				if ( parent ) { this.toFrame( 'select-item', { id: parent.getAttribute( 'data-id' ) } ); }
+			}
+		},
+
+		/** Category of a tree node: 'section', 'column', or 'element' (leaf). */
+		_nodeCat: function ( n ) {
+			var t = ( n && n.getAttribute && n.getAttribute( 'data-type' ) ) || '';
+			if ( /section$/.test( t ) ) { return 'section'; }
+			if ( t === 'column' ) { return 'column'; }
+			return 'element';
+		},
+
+		/** Can a tree container (nav body or a .fw-le-tree__children) hold `cat`? */
+		_containerAccepts: function ( containerEl, cat ) {
+			if ( ! containerEl ) { return false; }
+			if ( containerEl.classList.contains( 'fw-le-nav__body' ) ) { return cat === 'section'; }
+			var owner = containerEl.closest( '.fw-le-tree__node' );
+			var ot = owner ? ( owner.getAttribute( 'data-type' ) || '' ) : '';
+			if ( cat === 'column' ) { return /section$/.test( ot ); }
+			if ( cat === 'element' ) { return ot === 'column'; }
+			return false;
+		},
+
+		/** Right-click context menu for a tree node — the immediately-doable basics
+		 *  (copy / paste / duplicate / delete) mapped to the existing shell ops. */
+		/* ---- multi-select + bulk ops ---------------------------------- */
+
+		treeToggleMulti: function ( id ) {
+			if ( ! this.selectedIds ) { this.selectedIds = this.selectedId ? [ this.selectedId ] : []; }
+			var i = this.selectedIds.indexOf( id );
+			if ( i >= 0 ) { this.selectedIds.splice( i, 1 ); } else { this.selectedIds.push( id ); this._selAnchor = id; }
+			this.applyMultiHighlight();
+		},
+
+		treeSelectRange: function ( a, b ) {
+			var rows = this._visibleTreeNodes().map( function ( n ) { return n.getAttribute( 'data-id' ); } );
+			var ia = rows.indexOf( a ), ib = rows.indexOf( b );
+			if ( ia < 0 || ib < 0 ) { this.selectedIds = [ b ]; this._selAnchor = b; this.toFrame( 'select-item', { id: b } ); return; }
+			if ( ia > ib ) { var t = ia; ia = ib; ib = t; }
+			this.selectedIds = rows.slice( ia, ib + 1 );
+			this.applyMultiHighlight();
+		},
+
+		applyMultiHighlight: function () {
+			if ( ! this.$.nav ) { return; }
+			var body = this.$.nav[ 0 ].querySelector( '.fw-le-nav__body' );
+			if ( ! body ) { return; }
+			var prev = body.querySelectorAll( '.fw-le-tree__row.is-multi' );
+			for ( var i = 0; i < prev.length; i++ ) { prev[ i ].classList.remove( 'is-multi' ); }
+			var ids = ( this.selectedIds && this.selectedIds.length > 1 ) ? this.selectedIds : [];
+			for ( var j = 0; j < ids.length; j++ ) {
+				var n = body.querySelector( '.fw-le-tree__node[data-id="' + ids[ j ] + '"]' );
+				var r = n && n.querySelector( ':scope > .fw-le-tree__row' );
+				if ( r ) { r.classList.add( 'is-multi' ); }
+			}
+			var head = this.$.nav[ 0 ].querySelector( '.fw-le-panel__head strong' );
+			if ( head ) { head.textContent = ids.length ? ( ids.length + ' selected' ) : ( ( cfg.l10n && cfg.l10n.navigator ) || 'Structure' ); }
+		},
+
+		/** Ids a bulk op acts on: the multi-selection if >1, else the single selection. */
+		bulkIds: function () {
+			if ( this.selectedIds && this.selectedIds.length > 1 ) { return this.selectedIds.slice(); }
+			return this.selectedId ? [ this.selectedId ] : [];
+		},
+
+		bulkDelete: function () {
+			var ids = this.bulkIds();
+			if ( ! ids.length ) { return; }
+			var self = this;
+			if ( ids.length === 1 ) { this.confirmDelete( { id: ids[ 0 ], label: labelFor( this.nodeOf( ids[ 0 ] ) ) } ); return; }
+			this.confirm( {
+				title:       'Delete ' + ids.length + ' items?',
+				message:     'This removes them from the page. You can Exit without saving to undo.',
+				confirmText: 'Delete',
+				danger:      true
+			}, function () {
+				ids.forEach( function ( id ) { self.deleteItem( id ); } );
+				self.selectedIds = [];
+				self.applyMultiHighlight();
+			} );
+		},
+
+		bulkDuplicate: function () {
+			var ids = this.bulkIds(), self = this;
+			ids.forEach( function ( id ) { self.duplicateItem( id ); } );
+		},
+
+		openTreeMenu: function ( id, x, y ) {
+			this.closeTreeMenu();
+			var entry = id && this.index[ id ];
+			if ( ! entry ) { return; }
+			var self = this, label = labelFor( entry.node );
+		var multi = !! ( this.selectedIds && this.selectedIds.length > 1 && this.selectedIds.indexOf( id ) >= 0 );
+		var nSel = multi ? this.selectedIds.length : 1;
+			var hasClip = !! this.readClipboard();
+			var items = [
+				{ key: 'copy',      label: 'Copy',      icon: 'admin-page' },
+				{ key: 'paste',     label: 'Paste',     icon: 'clipboard', disabled: ! hasClip },
+				{ key: 'duplicate', label: multi ? ( 'Duplicate ' + nSel ) : 'Duplicate', icon: 'controls-repeat' },
+				{ sep: true },
+				{ key: 'delete',    label: multi ? ( 'Delete ' + nSel ) : 'Delete', icon: 'trash', danger: true }
+			];
+			var $m = this._treeMenu = $( '<div class="fw-le-tree-menu" role="menu"/>' );
+			items.forEach( function ( it ) {
+				if ( it.sep ) { $m.append( '<div class="fw-le-tree-menu__sep"></div>' ); return; }
+				$( '<button type="button" class="fw-le-tree-menu__item"/>' )
+					.attr( 'data-act', it.key )
+					.toggleClass( 'is-disabled', !! it.disabled )
+					.toggleClass( 'is-danger', !! it.danger )
+					.html( '<span class="dashicons dashicons-' + it.icon + '"></span>' + it.label )
+					.appendTo( $m );
+			} );
+			$m.appendTo( '#fw-live-editor-app' );
+
+			// Clamp to the viewport.
+			var mw = $m.outerWidth(), mh = $m.outerHeight();
+			if ( x + mw > window.innerWidth - 4 ) { x = window.innerWidth - mw - 4; }
+			if ( y + mh > window.innerHeight - 4 ) { y = window.innerHeight - mh - 4; }
+			$m.css( { left: Math.max( 4, x ) + 'px', top: Math.max( 4, y ) + 'px' } );
+
+			$m.on( 'click', '.fw-le-tree-menu__item', function () {
+				if ( this.classList.contains( 'is-disabled' ) ) { return; }
+				var act = this.getAttribute( 'data-act' );
+				self.closeTreeMenu();
+				if ( act === 'copy' ) { self.copyItem( id ); }
+				else if ( act === 'paste' ) { self.pasteItem( id ); }
+				else if ( act === 'duplicate' ) { if ( multi ) { self.bulkDuplicate(); } else { self.duplicateItem( id ); } }
+				else if ( act === 'delete' ) { if ( multi ) { self.bulkDelete(); } else { self.confirmDelete( { id: id, label: label } ); } }
+			} );
+
+			// Dismiss on outside pointerdown or Escape.
+			this._treeMenuDismiss = function ( ev ) {
+				if ( self._treeMenu && ! self._treeMenu[ 0 ].contains( ev.target ) ) { self.closeTreeMenu(); }
+			};
+			this._treeMenuKey = function ( ev ) { if ( ev.key === 'Escape' ) { self.closeTreeMenu(); } };
+			window.setTimeout( function () { document.addEventListener( 'pointerdown', self._treeMenuDismiss, true ); }, 0 );
+			document.addEventListener( 'keydown', this._treeMenuKey, true );
+		},
+
+		closeTreeMenu: function () {
+			if ( this._treeMenu ) { this._treeMenu.remove(); this._treeMenu = null; }
+			if ( this._treeMenuDismiss ) { document.removeEventListener( 'pointerdown', this._treeMenuDismiss, true ); this._treeMenuDismiss = null; }
+			if ( this._treeMenuKey ) { document.removeEventListener( 'keydown', this._treeMenuKey, true ); this._treeMenuKey = null; }
 		},
 
 		startNavDrag: function ( row, grip, e ) {
 			if ( ! row ) { return; }
+			if ( this.isNodeLocked( this.nodeOf( row.getAttribute( 'data-id' ) ) ) ) { return; }
 			var self = this;
 			// Bind to window (not the grip): the row — and the grip inside it — get
 			// moved in the DOM during the drag, which drops pointer-capture and would
@@ -917,7 +1344,7 @@
 			// catches every move/up reliably.
 			var d = this._navDrag = {
 				row: row, id: row.getAttribute( 'data-id' ),
-				startY: e.clientY, started: false, clone: null, grabDY: 0
+				container: row.parentNode, cat: this._nodeCat( row ), startY: e.clientY, started: false
 			};
 			d.move = function ( ev ) { self.onNavDragMove( ev ); };
 			d.up   = function ( ev ) { self.onNavDragUp( ev ); };
@@ -934,46 +1361,83 @@
 			if ( ! d.started ) {
 				if ( Math.abs( e.clientY - d.startY ) < 4 ) { return; }
 				d.started = true;
+					// The node stays in place and keeps its expanded children; only a
+					// "grabbing" style marks it — no clone, no whole-tree collapse. The
+					// row the cursor grabbed is the row that moves among its siblings.
+					d.row.classList.add( 'fw-le-tree__node--grabbing' );
+					this.$.nav.find( '.fw-le-nav__body' ).addClass( 'fw-le-tree--reordering' );
+				}
 
-				var rect = d.row.getBoundingClientRect();
-				d.grabDY = e.clientY - rect.top;
-
-				// A floating clone follows the cursor (the "lifted" block); the
-				// original row stays in the list as a faded placeholder gap.
-				var clone = d.clone = d.row.cloneNode( true );
-				clone.className = d.row.className + ' fw-le-nav__clone';
-				clone.style.cssText = 'position:fixed; left:' + rect.left + 'px; width:' + rect.width +
-					'px; margin:0; pointer-events:none; z-index:100002;';
-				document.body.appendChild( clone );
-				d.row.classList.add( 'fw-le-nav__placeholder' );
-			}
-
-			d.clone.style.top = ( e.clientY - d.grabDY ) + 'px';
-			this.navReorder( e.clientY );
+				this.navReorder( e.clientY );
 		},
 
 		/** Slide the placeholder gap to where the cursor is, FLIP-animating the rows
 		 *  that shift so they smoothly move out of the way. */
 		navReorder: function ( clientY ) {
-			var d = this._navDrag;
-			var $body = this.$.nav.find( '.fw-le-nav__body' );
-			var items = $body.children( '.fw-le-nav__item' ).toArray();
+			var d = this._navDrag, self = this, cat = d.cat;
+			var body = this.$.nav.find( '.fw-le-nav__body' )[ 0 ];
+			if ( ! body ) { return; }
 
-			// Where should the gap go? Before the first row whose midpoint is below
-			// the cursor (skip the placeholder itself); else the end.
-			var ref = null;
-			for ( var i = 0; i < items.length; i++ ) {
-				if ( items[ i ] === d.row ) { continue; }
-				var r = items[ i ].getBoundingClientRect();
-				if ( clientY < r.top + r.height / 2 ) { ref = items[ i ]; break; }
+			// Every visible node except the dragged one and its own descendants.
+			var all = Array.prototype.filter.call( body.querySelectorAll( '.fw-le-tree__node' ), function ( n ) {
+				return n !== d.row && ! d.row.contains( n ) && n.getClientRects().length;
+			} );
+
+			// Candidate insertion points: { y, container, ref }. (a) before/after a same-
+			// category peer whose parent accepts cat; (b) into a valid empty container.
+			var pts = [];
+			all.forEach( function ( n ) {
+				var row = n.querySelector( ':scope > .fw-le-tree__row' );
+				if ( ! row ) { return; }
+				var r = row.getBoundingClientRect();
+				if ( self._nodeCat( n ) === cat && self._containerAccepts( n.parentNode, cat ) ) {
+					pts.push( { y: r.top, container: n.parentNode, ref: n } );
+					pts.push( { y: r.bottom, container: n.parentNode, ref: n.nextElementSibling } );
+				}
+				var nt = n.getAttribute( 'data-type' ) || '';
+				var validParent = ( cat === 'element' && nt === 'column' ) || ( cat === 'column' && /section$/.test( nt ) );
+				if ( validParent ) {
+					var kidsBox = n.querySelector( ':scope > .fw-le-tree__children' );
+					var hasCatKid = kidsBox && Array.prototype.some.call( kidsBox.children, function ( c ) {
+						return c.classList && c.classList.contains( 'fw-le-tree__node' ) && self._nodeCat( c ) === cat;
+					} );
+					if ( ! hasCatKid ) { pts.push( { y: r.bottom, container: kidsBox, ref: null, into: n } ); }
+				}
+			} );
+			if ( ! pts.length ) { return; }
+
+			// The insertion point nearest the cursor wins.
+			var best = null, bestD = Infinity;
+			pts.forEach( function ( p ) { var dd = Math.abs( clientY - p.y ); if ( dd < bestD ) { bestD = dd; best = p; } } );
+			if ( ! best ) { return; }
+
+			var container = best.container, ref = best.ref;
+			if ( best.into && ! container ) {
+				// Materialise a children box so the preview can drop into an empty container.
+				container = document.createElement( 'div' );
+				container.className = 'fw-le-tree__children';
+				best.into.appendChild( container );
+				best.into.classList.remove( 'is-collapsed' );
 			}
-			// No-op if the placeholder is already there.
-			if ( ref === d.row.nextElementSibling || ( ref === null && ! d.row.nextElementSibling ) ) { return; }
+			if ( ! container ) { return; }
+			if ( ref && ! ( ref.classList && ref.classList.contains( 'fw-le-tree__node' ) ) ) { ref = null; }
 
-			// FLIP: record tops, move, then animate each row from old → new.
-			var firsts = items.map( function ( it ) { return { el: it, top: it.getBoundingClientRect().top }; } );
-			if ( ref ) { d.row.parentNode.insertBefore( d.row, ref ); }
-			else { d.row.parentNode.appendChild( d.row ); }
+			// Already in place?
+			if ( d.row.parentNode === container &&
+				( ref === d.row.nextElementSibling || ( ref === null && d.row === container.lastElementChild ) ) ) { return; }
+
+			// FLIP across both the source and destination containers.
+			var affected = [];
+			[ d.container, container ].forEach( function ( c ) {
+				if ( ! c ) { return; }
+				Array.prototype.forEach.call( c.children, function ( k ) {
+					if ( k.classList && k.classList.contains( 'fw-le-tree__node' ) && affected.indexOf( k ) < 0 ) { affected.push( k ); }
+				} );
+			} );
+			var firsts = affected.map( function ( el ) { return { el: el, top: el.getBoundingClientRect().top }; } );
+			if ( ref ) { container.insertBefore( d.row, ref ); }
+			else { container.appendChild( d.row ); }
+			d.container = container;
 			firsts.forEach( function ( f ) {
 				var delta = f.top - f.el.getBoundingClientRect().top;
 				if ( ! delta ) { return; }
@@ -994,42 +1458,234 @@
 			window.removeEventListener( 'pointercancel', d.up, true );
 			this._navDrag = null;
 
-			if ( d.clone && d.clone.parentNode ) { d.clone.parentNode.removeChild( d.clone ); }
-			d.row.classList.remove( 'fw-le-nav__placeholder' );
-			this.$.nav.find( '.fw-le-nav__item' ).css( { transition: '', transform: '' } );
-			if ( ! d.started ) { return; }
+			d.row.classList.remove( 'fw-le-tree__node--grabbing' );
+				this.$.nav.find( '.fw-le-nav__body' ).removeClass( 'fw-le-tree--reordering' );
+				this.$.nav.find( '.fw-le-tree__node' ).css( { transition: '', transform: '' } );
+				if ( ! d.started ) { return; }
 
-			// The placeholder is already in its final slot — commit that order.
-			var next = d.row.nextElementSibling;
-			var beforeId = next ? next.getAttribute( 'data-id' ) : null;
-			this.moveSectionTo( d.id, beforeId );
+				// The node is already in its final slot — commit that order. Anchor the
+				// insert on the next real sibling node.
+				var next = d.row.nextElementSibling;
+				while ( next && ! ( next.classList && next.classList.contains( 'fw-le-tree__node' ) ) ) {
+					next = next.nextElementSibling;
+				}
+				var beforeId = next ? next.getAttribute( 'data-id' ) : null;
+
+				if ( d.container.classList.contains( 'fw-le-nav__body' ) ) {
+					this.moveSectionTo( d.id, beforeId );          // top-level section
+				} else {
+					// A column or element — reorder within its parent node.
+					var parentNode = d.container.closest( '.fw-le-tree__node' );
+					this.moveNavItem( d.id, parentNode ? parentNode.getAttribute( 'data-id' ) : null, beforeId );
+				}
 		},
 
-		/** Rebuild the navigator list from the current model order. */
+		/** Commit a navigator reorder of a column / element within its parent,
+		 *  reusing the same model engine the canvas drag uses. */
+		moveNavItem: function ( id, parentId, beforeId ) {
+			if ( ! id || id === beforeId ) { return; }
+			var entry = this.index[ id ];
+			var oldParentId = entry ? entry.parentId : null;
+			this.moveItem( { id: id, targetParentId: parentId, beforeId: beforeId || null } );
+			this.refreshNavigator();
+			// Re-render the destination subtree (and the source, if it changed) so the
+			// canvas reflects the move live. Old parent first so the moved element is
+			// never briefly duplicated across the two containers.
+			if ( oldParentId && oldParentId !== parentId ) { this.rerenderContainer( oldParentId, null ); }
+			this.rerenderContainer( parentId, id );
+		},
+
+		/** Re-render a container node (section / column) in the canvas from the current
+		 *  model, re-selecting selectId afterwards. Used after a navigator reorder. */
+		rerenderContainer: function ( containerId, selectId ) {
+			var entry = containerId && this.index[ containerId ];
+			if ( ! entry ) { return; }
+			var self = this;
+			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( entry.node ) }, function ( resp ) {
+				if ( resp && resp.success && resp.data && typeof resp.data.html === 'string' ) {
+					self.toFrame( 'replace', { id: containerId, html: resp.data.html, selectId: selectId || null, animate: true } );
+				} else {
+					window.console && console.error( '[fw-le-shell] nav reorder re-render failed', resp );
+				}
+			} );
+		},
+
+		/** Filter the Structure tree by label. A node shows if it matches or contains a
+		 *  match; ancestors of matches are revealed. Empty query resets everything. */
+		filterTree: function ( q ) {
+			if ( ! this.$.nav ) { return; }
+			var body = this.$.nav[ 0 ].querySelector( '.fw-le-nav__body' );
+			if ( ! body ) { return; }
+			q = ( q || '' ).trim().toLowerCase();
+			var nodes = body.querySelectorAll( '.fw-le-tree__node' );
+			body.classList.toggle( 'is-filtering', !! q );
+			if ( ! q ) {
+				Array.prototype.forEach.call( nodes, function ( n ) { n.style.display = ''; n.classList.remove( 'is-match' ); } );
+				return;
+			}
+			Array.prototype.forEach.call( nodes, function ( n ) {
+				var lbl = n.querySelector( ':scope > .fw-le-tree__row .fw-le-tree__label' );
+				n.classList.toggle( 'is-match', !! lbl && lbl.textContent.toLowerCase().indexOf( q ) >= 0 );
+			} );
+			Array.prototype.forEach.call( nodes, function ( n ) {
+				var show = n.classList.contains( 'is-match' ) || !! n.querySelector( '.fw-le-tree__node.is-match' );
+				n.style.display = show ? '' : 'none';
+				if ( n.classList.contains( 'is-match' ) ) {
+					var a = n.parentNode;
+					while ( a && a !== body ) {
+						if ( a.classList && a.classList.contains( 'fw-le-tree__node' ) ) { a.classList.remove( 'is-collapsed' ); a.style.display = ''; }
+						a = a.parentNode;
+					}
+				}
+			} );
+		},
+
+		/** Rebuild the Structure tree from the current model. */
 		refreshNavigator: function () {
 			if ( ! this.$.nav ) { return; }
-			var $body = this.$.nav.find( '.fw-le-nav__body' ).empty();
+			var $nb = this.$.nav.find( '.fw-le-nav__body' );
+			// Preserve which nodes are collapsed across the rebuild.
+			this._navCollapsed = {};
+			var self0 = this;
+			$nb.find( '.fw-le-tree__node.is-collapsed' ).each( function () {
+				var cid = this.getAttribute( 'data-id' ); if ( cid ) { self0._navCollapsed[ cid ] = 1; }
+			} );
+			var $body = $nb.empty().removeClass( 'fw-le-tree--reordering' );
+			var self = this;
 			this.model.forEach( function ( item, idx ) {
-				var id = ( item.atts && item.atts.unique_id ) || item.unique_id;
-				if ( ! id ) { return; }
-				var info = sectionMeta( item, idx );
-				var $row = $(
-					'<div class="fw-le-nav__item">' +
-						'<span class="fw-le-nav__grip dashicons dashicons-menu" title="Drag to reorder"></span>' +
-						'<span class="fw-le-nav__label"></span>' +
-						'<span class="fw-le-nav__type"></span>' +
-					'</div>'
-				).attr( 'data-id', id );
-				var $label = $row.find( '.fw-le-nav__label' )
-					.text( info.label )
-					.attr( 'title', ( cfg.l10n && cfg.l10n.renameTip ) || 'Double-click to rename' );
-				if ( ! info.named ) { $label.addClass( 'fw-le-nav__label--placeholder' ); }
-				if ( info.badge ) { $row.find( '.fw-le-nav__type' ).text( info.badge ); }
-				else { $row.find( '.fw-le-nav__type' ).remove(); }
-				$body.append( $row );
+				var $n = self.renderTreeNode( item, 0, idx );
+				if ( $n ) { $body.append( $n ); }
 			} );
 			if ( ! this.model.length ) {
 				$body.append( '<div class="fw-le-nav__empty">' + ( ( cfg.l10n && cfg.l10n.noSections ) || 'No sections yet.' ) + '</div>' );
+			}
+			// Re-apply the active highlight for the current selection.
+			if ( this.selectedId ) { this.highlightTreeRow( this.selectedId, false ); }
+			if ( this._navFilter ) { this.filterTree( this._navFilter ); }
+			this.applyMultiHighlight();
+		},
+
+		/** The children shown under a node in the tree: a section shows its columns
+		 *  (unwrapping any row); every other container shows its `_items`. */
+		treeChildrenOf: function ( node ) {
+			if ( ! node ) { return []; }
+			if ( /section$/.test( node.type || '' ) ) { return columnArrayOf( node ); }
+			return node._items || [];
+		},
+
+		/** A dashicon name for a tree row, by container type or leaf shortcode. */
+		treeIcon: function ( node ) {
+			var t = node.type || '';
+			if ( t === 'masonry_section' ) { return 'grid-view'; }
+			if ( /section$/.test( t ) ) { return 'align-wide'; }
+			if ( t === 'column' ) { return 'columns'; }
+			if ( t === 'row' ) { return 'menu'; }
+			var map = {
+				text_block: 'editor-paragraph', special_heading: 'heading', media_image: 'format-image',
+				button: 'button', icon: 'star-filled', icon_box: 'screenoptions', blockquote: 'editor-quote',
+				notification: 'megaphone', highlight_text: 'admin-customizer', badge: 'tag',
+				call_to_action: 'megaphone', team_member: 'groups', gallery: 'format-gallery',
+				accordion: 'menu', tabs: 'index-card', testimonials: 'testimonial', posts: 'admin-post'
+			};
+			return map[ node.shortcode ] || 'media-default';
+		},
+
+		/** Render one model node (and its subtree) as a tree node element. */
+		renderTreeNode: function ( node, depth, idx ) {
+			var id = ( node.atts && node.atts.unique_id ) || node.unique_id;
+			if ( ! id ) { return null; }
+			var isSection = /section$/.test( node.type || '' );
+			var kids = this.treeChildrenOf( node ).filter( function ( c ) {
+				return c && ( ( c.atts && c.atts.unique_id ) || c.unique_id );
+			} );
+			var hasKids = kids.length > 0;
+
+			var $node = $( '<div class="fw-le-tree__node"/>' )
+				.attr( 'data-id', id )
+				.attr( 'data-type', node.type || '' );
+			if ( isSection ) { $node.addClass( 'fw-le-tree__node--section' ); }
+				if ( this._navCollapsed && this._navCollapsed[ id ] ) { $node.addClass( 'is-collapsed' ); }
+
+			var $row = $( '<div class="fw-le-tree__row"/>' ).css( 'padding-left', ( 4 + depth * 13 ) + 'px' );
+			$row.append( hasKids
+				? '<button type="button" class="fw-le-tree__toggle" aria-label="Toggle"></button>'
+				: '<span class="fw-le-tree__toggle fw-le-tree__toggle--leaf"></span>' );
+			$row.append( '<span class="fw-le-tree__icon dashicons dashicons-' + this.treeIcon( node ) + '"></span>' );
+
+			var meta  = isSection ? sectionMeta( node, idx ) : null;
+			var label = isSection ? meta.label : labelFor( node );
+			var $label = $( '<span class="fw-le-tree__label"/>' ).text( label );
+			if ( isSection ) {
+				$label.attr( 'title', ( cfg.l10n && cfg.l10n.renameTip ) || 'Double-click to rename' );
+				if ( ! meta.named ) { $label.addClass( 'fw-le-tree__label--placeholder' ); }
+			} else {
+				$label.attr( 'title', 'Double-click to rename' );
+			}
+			$row.append( $label );
+			if ( isSection && meta.badge ) { $row.append( $( '<span class="fw-le-tree__badge"/>' ).text( meta.badge ) ); }
+			// Drag grip at the far right of every row, revealed on hover — reorders
+				// the node among its siblings (section, column, or element).
+				var _hidden = this.isNodeHidden( node );
+		var _add = node.type === 'column' ? '<button type="button" class="fw-le-tree__act fw-le-tree__act--add dashicons dashicons-plus-alt2" title="Add element"></button>' : '';
+		var _locked = this.isNodeLocked( node );
+		if ( _locked ) { $node.addClass( 'is-locked' ); }
+		var _lockBtn = '<button type="button" class="fw-le-tree__act fw-le-tree__act--lock dashicons dashicons-' + ( _locked ? 'lock' : 'unlock' ) + '" title="' + ( _locked ? 'Unlock' : 'Lock' ) + '"></button>';
+				if ( _hidden ) { $node.addClass( 'is-hidden' ); }
+				$row.append(
+					'<span class="fw-le-tree__tail">' + _add + _lockBtn +
+						'<button type="button" class="fw-le-tree__act fw-le-tree__act--vis dashicons dashicons-' + ( _hidden ? 'hidden' : 'visibility' ) + '" title="' + ( _hidden ? 'Show' : 'Hide' ) + '"></button>' +
+						'<button type="button" class="fw-le-tree__act fw-le-tree__act--dup dashicons dashicons-admin-page" title="Duplicate"></button>' +
+						'<button type="button" class="fw-le-tree__act fw-le-tree__act--del dashicons dashicons-trash" title="Delete"></button>' +
+						'<span class="fw-le-tree__grip dashicons dashicons-menu" title="Drag to reorder"></span>' +
+					'</span>'
+				);
+			$node.append( $row );
+
+			if ( hasKids ) {
+				var $kids = $( '<div class="fw-le-tree__children"/>' );
+				var self = this;
+				kids.forEach( function ( c, i ) {
+					var $c = self.renderTreeNode( c, depth + 1, i );
+					if ( $c ) { $kids.append( $c ); }
+				} );
+				$node.append( $kids );
+			}
+			return $node;
+		},
+
+		/** Highlight the tree row for `id`, expanding its ancestors; optionally scroll
+		 *  it into view (when a canvas selection should reveal itself in the tree). */
+		/** Mark the tree row for `id` as hover-highlighted (from a canvas hover). */
+		highlightHoverRow: function ( id ) {
+			if ( ! this.$.nav ) { return; }
+			var body = this.$.nav[ 0 ].querySelector( '.fw-le-nav__body' );
+			if ( ! body ) { return; }
+			var prev = body.querySelector( '.fw-le-tree__row.is-hover' );
+			if ( prev ) { prev.classList.remove( 'is-hover' ); }
+			if ( ! id ) { return; }
+			var n = body.querySelector( '.fw-le-tree__node[data-id="' + id + '"]' );
+			var r = n && n.querySelector( ':scope > .fw-le-tree__row' );
+			if ( r ) { r.classList.add( 'is-hover' ); }
+		},
+
+		highlightTreeRow: function ( id, scroll ) {
+			if ( ! this.$.nav || ! id ) { return; }
+			var $body = this.$.nav.find( '.fw-le-nav__body' );
+			$body.find( '.fw-le-tree__row.is-active' ).removeClass( 'is-active' );
+			var root = $body[ 0 ];
+			if ( ! root ) { return; }
+			var esc  = ( window.CSS && CSS.escape ) ? CSS.escape( id ) : id;
+			var node = root.querySelector( '.fw-le-tree__node[data-id="' + esc + '"]' );
+			if ( ! node ) { return; }
+			var anc = node.parentNode;
+			while ( anc && anc !== root ) {
+				if ( anc.classList && anc.classList.contains( 'fw-le-tree__node' ) ) { anc.classList.remove( 'is-collapsed' ); }
+				anc = anc.parentNode;
+			}
+			var row = node.querySelector( ':scope > .fw-le-tree__row' );
+			if ( row ) {
+				row.classList.add( 'is-active' );
+				if ( scroll && row.scrollIntoView ) { row.scrollIntoView( { block: 'nearest' } ); }
 			}
 		},
 
@@ -2174,6 +2830,11 @@
 			this.$.breadcrumb.empty();
 			var id = payload && payload.id;
 			this.selectedId = ( id && this.index[ id ] ) ? id : null;
+		this.selectedIds = this.selectedId ? [ this.selectedId ] : [];
+		this._selAnchor = this.selectedId;
+		this.applyMultiHighlight();
+			// Reflect the canvas selection in the Structure tree (highlight + reveal).
+			if ( this.$.nav ) { this.highlightTreeRow( this.selectedId, $( 'body' ).hasClass( 'fw-le-nav-open' ) ); }
 			if ( ! id || ! this.index[ id ] ) { return; }
 
 			// Walk parentIds (root → selected).
@@ -2369,6 +3030,12 @@
 			if ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) ) { return; }
 			if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); this.undo(); }
 			else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); this.redo(); }
+		else if ( ( k === 'd' || k === 'c' || k === 'v' ) && document.body.classList.contains( 'fw-le-nav-open' ) && this.selectedId ) {
+			e.preventDefault();
+			if ( k === 'd' ) { this.bulkDuplicate(); }
+			else if ( k === 'c' ) { this.copyItem( this.selectedId ); }
+			else { this.pasteItem( this.selectedId ); }
+		}
 		},
 
 		markDirty: function () {

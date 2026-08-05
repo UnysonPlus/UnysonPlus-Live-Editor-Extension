@@ -802,6 +802,170 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	text-align: center;
 }
 
+/* ---- Structure tree (the "Structure" side panel) -------------------------- */
+.fw-le-nav__body { padding: 6px 4px; }
+
+.fw-le-tree__node { position: relative; }
+
+.fw-le-tree__row {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	padding: 4px 8px 4px 2px;
+	border-radius: 5px;
+	cursor: pointer;
+	user-select: none;
+	color: #c7c9d3;
+	transition: background .1s ease;
+}
+.fw-le-tree__row:hover { background: #2f313c; }
+.fw-le-tree__row.is-active {
+	background: rgba( 79, 140, 255, .18 );
+	color: #fff;
+	box-shadow: inset 2px 0 0 #4f8cff;
+}
+
+.fw-le-tree__toggle {
+	flex: 0 0 auto;
+	width: 15px; height: 15px;
+	padding: 0; margin: 0;
+	background: none; border: 0;
+	color: #7c818f; cursor: pointer;
+	display: inline-flex; align-items: center; justify-content: center;
+}
+.fw-le-tree__toggle:not( .fw-le-tree__toggle--leaf )::before {
+	content: '';
+	width: 0; height: 0;
+	border-left: 4px solid currentColor;
+	border-top: 4px solid transparent;
+	border-bottom: 4px solid transparent;
+	transition: transform .12s ease;
+}
+.fw-le-tree__node:not( .is-collapsed ) > .fw-le-tree__row > .fw-le-tree__toggle:not( .fw-le-tree__toggle--leaf )::before {
+	transform: rotate( 90deg );
+}
+.fw-le-tree__toggle--leaf { cursor: default; }
+
+.fw-le-tree__grip {
+	flex: 0 0 auto;
+	margin-left: auto;                 /* shove to the far right of the row */
+	color: #6b7080; cursor: grab;
+	font-size: 15px; width: 15px; height: 15px;
+	touch-action: none;
+	opacity: 0;                        /* hidden until the row is hovered */
+	transition: opacity .12s ease;
+}
+.fw-le-tree__row:hover .fw-le-tree__grip,
+.fw-le-tree__row.is-active .fw-le-tree__grip { opacity: 1; }
+.fw-le-tree__grip:hover { color: #c7c9d3; }
+
+.fw-le-tree__icon {
+	flex: 0 0 auto;
+	font-size: 14px; width: 15px; height: 15px;
+	color: #8b90a0;
+}
+.fw-le-tree__node--section > .fw-le-tree__row .fw-le-tree__icon { color: #4f8cff; }
+
+.fw-le-tree__label {
+	flex: 1 1 auto; min-width: 0;
+	font-size: 12px;
+	overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fw-le-tree__node--section > .fw-le-tree__row .fw-le-tree__label { font-weight: 600; }
+.fw-le-tree__label--placeholder { font-style: italic; color: #868b97; font-weight: 400 !important; }
+
+.fw-le-tree__badge {
+	flex: 0 0 auto;
+	font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+	color: #7c818f; background: #1b1d24;
+	padding: 2px 5px; border-radius: 4px;
+}
+
+/* A faint guide line down each nesting level. */
+.fw-le-tree__children { position: relative; }
+.fw-le-tree__children::before {
+	content: '';
+	position: absolute;
+	top: 0; bottom: 4px;
+	left: 11px;
+	width: 1px;
+	background: #34363f;
+}
+.fw-le-tree__node.is-collapsed > .fw-le-tree__children { display: none; }
+
+/* The node being dragged stays in flow (subtrees stay expanded) and just gets
+ * a lifted, outlined look so it reads as "held" while its siblings glide aside. */
+.fw-le-tree__node--grabbing > .fw-le-tree__row {
+	background: rgba( 79, 140, 255, .22 );
+	box-shadow: inset 0 0 0 1px #4f8cff, 0 4px 14px rgba( 0, 0, 0, .35 );
+	border-radius: 5px;
+}
+.fw-le-tree--reordering { cursor: grabbing; }
+.fw-le-tree--reordering .fw-le-tree__grip { cursor: grabbing; }
+
+/* ---- Structure header tools (collapse-all) ---- */
+#fw-le-nav .fw-le-nav__tools {
+	display: inline-flex;
+	align-items: center;
+	margin-left: auto;               /* group tools + close at the right */
+	margin-right: 10px;
+}
+.fw-le-nav__collapse-all {
+	background: none; border: 0; padding: 0;
+	width: 22px; height: 22px;
+	display: inline-flex; align-items: center; justify-content: center;
+	color: #9aa0ad; cursor: pointer;
+	font-size: 17px; line-height: 1;
+	border-radius: 4px;
+	transition: color .12s ease, background .12s ease;
+}
+.fw-le-nav__collapse-all:hover { color: #fff; background: #34363f; }
+.fw-le-nav__collapse-all.is-expanded { color: #4f8cff; }
+
+/* ---- Tree right-click context menu ---- */
+.fw-le-tree-menu {
+	position: fixed;
+	z-index: 100003;
+	min-width: 170px;
+	padding: 5px;
+	background: #23252e;
+	border: 1px solid #3a3d47;
+	border-radius: 8px;
+	box-shadow: 0 12px 34px rgba( 0, 0, 0, .5 );
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+.fw-le-tree-menu__item {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	width: 100%;
+	padding: 7px 10px;
+	background: none; border: 0;
+	border-radius: 5px;
+	color: #d7d9e0;
+	font-size: 12.5px;
+	text-align: left;
+	cursor: pointer;
+}
+.fw-le-tree-menu__item .dashicons {
+	font-size: 15px; width: 15px; height: 15px;
+	color: #9aa0ad;
+}
+.fw-le-tree-menu__item:hover { background: #34364150; background: #313440; }
+.fw-le-tree-menu__item:hover .dashicons { color: #c7c9d3; }
+.fw-le-tree-menu__item.is-danger { color: #e0738a; }
+.fw-le-tree-menu__item.is-danger .dashicons { color: #e0738a; }
+.fw-le-tree-menu__item.is-danger:hover { background: rgba( 224, 115, 138, .14 ); }
+.fw-le-tree-menu__item.is-disabled {
+	opacity: .4; cursor: default;
+}
+.fw-le-tree-menu__item.is-disabled:hover { background: none; }
+.fw-le-tree-menu__sep {
+	height: 1px;
+	margin: 5px 6px;
+	background: #3a3d47;
+}
+
 .fw-le-panel__head {
 	display: flex;
 	align-items: center;
@@ -1254,3 +1418,157 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	white-space: nowrap;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* --------------------------------------------------------------------------
+ * Custom scrollbars for the editor panels — a slim, themed bar that matches
+ * the dark chrome instead of the browser's default. Applies to every
+ * scrollable panel body (Structure, Add, Options, Templates, History).
+ * WebKit/Blink via ::-webkit-scrollbar; Firefox via scrollbar-width/color.
+ * ------------------------------------------------------------------------ */
+.fw-le-history__body,
+.fw-le-tpl__body,
+.fw-le-nav__body,
+.fw-le-panel__body {
+	scrollbar-width: thin;                       /* Firefox */
+	scrollbar-color: rgba( 255, 255, 255, .18 ) transparent;
+}
+.fw-le-history__body::-webkit-scrollbar,
+.fw-le-tpl__body::-webkit-scrollbar,
+.fw-le-nav__body::-webkit-scrollbar,
+.fw-le-panel__body::-webkit-scrollbar {
+	width: 10px;
+	height: 10px;
+}
+.fw-le-history__body::-webkit-scrollbar-track,
+.fw-le-tpl__body::-webkit-scrollbar-track,
+.fw-le-nav__body::-webkit-scrollbar-track,
+.fw-le-panel__body::-webkit-scrollbar-track {
+	background: transparent;
+}
+.fw-le-history__body::-webkit-scrollbar-thumb,
+.fw-le-tpl__body::-webkit-scrollbar-thumb,
+.fw-le-nav__body::-webkit-scrollbar-thumb,
+.fw-le-panel__body::-webkit-scrollbar-thumb {
+	background: rgba( 255, 255, 255, .16 );
+	border: 2px solid transparent;               /* inset the thumb, leaves a gap */
+	background-clip: padding-box;
+	border-radius: 8px;
+	transition: background-color .15s ease;
+}
+.fw-le-history__body::-webkit-scrollbar-thumb:hover,
+.fw-le-tpl__body::-webkit-scrollbar-thumb:hover,
+.fw-le-nav__body::-webkit-scrollbar-thumb:hover,
+.fw-le-panel__body::-webkit-scrollbar-thumb:hover {
+	background: rgba( 143, 176, 255, .55 );      /* the panel accent blue on hover */
+}
+.fw-le-history__body::-webkit-scrollbar-thumb:active,
+.fw-le-tpl__body::-webkit-scrollbar-thumb:active,
+.fw-le-nav__body::-webkit-scrollbar-thumb:active,
+.fw-le-panel__body::-webkit-scrollbar-thumb:active {
+	background: rgba( 143, 176, 255, .8 );
+}
+.fw-le-history__body::-webkit-scrollbar-corner,
+.fw-le-tpl__body::-webkit-scrollbar-corner,
+.fw-le-nav__body::-webkit-scrollbar-corner,
+.fw-le-panel__body::-webkit-scrollbar-corner {
+	background: transparent;
+}
+
+/* ---- Structure: hover quick-actions (visibility / duplicate / delete) + grip ---- */
+.fw-le-tree__tail {
+	display: inline-flex;
+	align-items: center;
+	gap: 1px;
+	margin-left: auto;               /* push the cluster to the far right */
+	opacity: 0;
+	transition: opacity .12s ease;
+}
+.fw-le-tree__row:hover .fw-le-tree__tail,
+.fw-le-tree__row.is-active .fw-le-tree__tail { opacity: 1; }
+
+.fw-le-tree__act {
+	background: none; border: 0; padding: 0; margin: 0;
+	width: 20px; height: 20px;
+	display: inline-flex; align-items: center; justify-content: center;
+	color: #8b90a0; cursor: pointer;
+	font-size: 15px; line-height: 1;
+	border-radius: 4px;
+	transition: color .12s ease, background .12s ease;
+}
+.fw-le-tree__act.dashicons { width: 20px; height: 20px; }
+.fw-le-tree__act:hover { color: #e7e8ec; background: #3a3d47; }
+.fw-le-tree__act--del:hover { color: #e0738a; background: rgba( 224, 115, 138, .14 ); }
+
+/* Grip sits at the end of the cluster; it's always shown once the cluster is. */
+.fw-le-tree__tail .fw-le-tree__grip {
+	opacity: 1;
+	margin-left: 2px;
+}
+
+/* Hidden nodes: dim the label and keep the eye visible so the state is legible
+ * even without hovering. */
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__label {
+	opacity: .5;
+	font-style: italic;
+}
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__tail { opacity: 1; }
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__act--dup,
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__act--del,
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__grip { opacity: 0; }
+.fw-le-tree__row:hover .fw-le-tree__act--dup,
+.fw-le-tree__row:hover .fw-le-tree__act--del,
+.fw-le-tree__row:hover .fw-le-tree__grip { opacity: 1; }
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__act--vis { color: #4f8cff; }
+
+/* ---- Structure: filter box ---- */
+.fw-le-nav__search {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	padding: 9px 12px;
+	border-bottom: 1px solid #34363f;
+}
+.fw-le-nav__search .dashicons {
+	font-size: 15px; width: 15px; height: 15px;
+	color: #7c818f; flex: 0 0 auto;
+}
+.fw-le-nav__search input {
+	flex: 1 1 auto;
+	min-width: 0;
+	box-sizing: border-box;
+	height: 28px;
+	min-height: 0;                   /* override wp-admin forms.min.css min-height:40px */
+	padding: 0 8px;
+	background: #1c1e25;
+	border: 1px solid #3a3d47;
+	border-radius: 5px;
+	color: #e7e8ec;
+	font-size: 12.5px;
+	outline: none;
+}
+.fw-le-nav__search input:focus { border-color: #4f8cff; }
+.fw-le-nav__search input::placeholder { color: #6b7080; }
+
+/* ---- Structure: canvas↔tree hover sync ---- */
+.fw-le-tree__row.is-hover { background: #2b2d37; box-shadow: inset 0 0 0 1px #3f4250; }
+
+/* Add-element "+" quick-action gets the accent on hover. */
+.fw-le-tree__act--add:hover { color: #8fb0ff; background: rgba( 79, 140, 255, .16 ); }
+
+/* Add panel while aimed at a specific container (from the tree "+"). */
+#fw-le-panel.is-targeting .fw-le-panel__head { color: #8fb0ff; }
+
+/* ---- Structure: multi-select ---- */
+.fw-le-tree__row.is-multi { background: rgba( 79, 140, 255, .13 ); }
+.fw-le-tree__row.is-multi.is-active { background: rgba( 79, 140, 255, .24 ); }
+
+/* ---- Structure: locked nodes ---- */
+.fw-le-tree__act--lock:hover { color: #e7e8ec; background: #3a3d47; }
+/* A locked node shows its (amber) lock persistently; other actions stay hover-only,
+ * and it can't be dragged (grip hidden). */
+.fw-le-tree__node.is-locked > .fw-le-tree__row .fw-le-tree__tail { opacity: 1; }
+.fw-le-tree__node.is-locked > .fw-le-tree__row .fw-le-tree__tail > *:not( .fw-le-tree__act--lock ) { opacity: 0; }
+.fw-le-tree__row:hover .fw-le-tree__tail > * { opacity: 1; }
+.fw-le-tree__node.is-locked > .fw-le-tree__row .fw-le-tree__act--lock { color: #d8a534; }
+.fw-le-tree__node.is-locked > .fw-le-tree__row .fw-le-tree__grip { display: none; }
+.fw-le-tree__node.is-locked > .fw-le-tree__row .fw-le-tree__label { color: #a9a08a; }
