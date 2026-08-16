@@ -1110,7 +1110,7 @@
 				if ( done ) { return; }
 				done = true;
 				if ( save ) {
-					var val = $.trim( $input.val() );
+					var val = ( $input.val() || '' ).trim();
 					if ( ! node.atts ) { node.atts = {}; }
 					var cur = ( typeof node.atts._le_label === 'string' ) ? node.atts._le_label : '';
 					if ( cur !== val ) {
@@ -1712,7 +1712,7 @@
 				if ( done ) { return; }
 				done = true;
 				if ( save ) {
-					var val = $.trim( $input.val() );
+					var val = ( $input.val() || '' ).trim();
 					if ( ! node.atts ) { node.atts = {}; }
 					if ( ( node.atts.css_id || '' ) !== val ) {
 						self.recordHistory();
