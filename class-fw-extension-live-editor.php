@@ -35,10 +35,28 @@ class FW_Extension_Live_Editor extends FW_Extension {
 
 	/** Revision history: a small index meta (list metadata) + one meta per
 	 *  revision holding the full model JSON; capped at REVISIONS_MAX (oldest
-	 *  trimmed). */
+	 *  trimmed) AND at REVISIONS_MAX_BYTES in total.
+	 *
+	 *  The byte cap is the load-bearing one. A revision holds the FULL builder
+	 *  model JSON, which on a rich page runs to about 1 MB, so a count-only cap
+	 *  of 20 permits ~20 MB of postmeta on a single post. That is not merely
+	 *  disk: WordPress caches post meta PER POST, not per key, so the first
+	 *  get_post_meta() call for any key loads every row the post owns. Measured
+	 *  on a real page carrying 11.5 MB of revisions, one innocuous
+	 *  get_post_meta( $id, '_wp_page_template' ) pulled 42 MB into memory — the
+	 *  stored bytes expand roughly 3.6x as live PHP strings — and that happens
+	 *  on any request touching that post's meta at all.
+	 *
+	 *  REVISIONS_MIN_KEEP is the deliberate escape hatch: a page whose single
+	 *  revision already exceeds the budget would otherwise keep no history at
+	 *  all, so the floor wins over the cap. A page with enormous revisions can
+	 *  therefore still exceed the budget; that case wants compression, not a
+	 *  smaller cap. */
 	const REVISIONS_INDEX_META = '_fw_le_rev_index';
 	const REVISION_META_PREFIX = '_fw_le_rev_';
 	const REVISIONS_MAX        = 20;
+	const REVISIONS_MAX_BYTES  = 3145728; // 3 MB of stored JSON per post.
+	const REVISIONS_MIN_KEEP   = 2;       // Always keep at least this many.
 
 	/** Query var that boots the editor shell (the chrome around the iframe). */
 	private $boot_query_var = 'fw-live-editor';
@@ -79,6 +97,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// go through fw_set_db_post_option, which fires this). The dedupe in
 		// store_revision() keeps the shared history free of duplicates.
 		add_action( 'fw_post_options_update', array( $this, '_action_snapshot_revision' ), 10, 2 );
+
+		// One-time prune of history written before the byte cap existed. Without
+		// it the cap only governs NEW revisions and existing sites keep whatever
+		// they already accumulated (150 MB of postmeta on one measured install).
+		add_action( 'admin_init', array( $this, '_action_migrate_revision_budget' ) );
 
 		// --- Edit-mode render filters. ---
 		// These act inside the iframe (frame request) AND during the single-item
@@ -1680,7 +1703,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// the fw_post_options_update hook (which the same save triggers) then no-ops.
 		if ( ! empty( $index[0]['time'] ) ) {
 			$latest = get_post_meta( $post_id, self::REVISION_META_PREFIX . (int) $index[0]['time'], true );
-			if ( is_string( $latest ) && $latest === $json ) {
+			if ( is_string( $latest ) && $this->decode_revision( $latest ) === $json ) {
 				return;
 			}
 		}
@@ -1688,26 +1711,321 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		$time = time();
 		$user = wp_get_current_user();
 
+		$stored = $this->encode_revision( $json );
+
 		// wp_slash(): update_post_meta() wp_unslash()es internally; the JSON arrives
-		// already-unslashed, so re-slash or its backslashes are stripped.
-		update_post_meta( $post_id, self::REVISION_META_PREFIX . $time, wp_slash( $json ) );
+		// already-unslashed, so re-slash or its backslashes are stripped. (A no-op
+		// for the compressed form — base64's alphabet contains no backslashes.)
+		update_post_meta( $post_id, self::REVISION_META_PREFIX . $time, wp_slash( $stored ) );
 
 		array_unshift( $index, array(
 			'time' => $time,
 			'user' => $user ? $user->ID : 0,
 			'name' => $user ? $user->display_name : '',
+			// Recorded so trimming never has to READ the revisions to size them —
+			// reading them would trigger exactly the meta-cache load this cap exists
+			// to prevent. Legacy entries have no 'bytes'; see backfill_revision_sizes().
+			// This is the STORED length (post-compression), because the budget governs
+			// the site's actual footprint, not the payload's uncompressed size.
+			'bytes' => strlen( $stored ),
 		) );
+
+		$index = $this->trim_revisions( $post_id, $index );
+
+		update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+	}
+
+	/**
+	 * Marker prefixing a compressed revision payload.
+	 *
+	 * Versioned ('gz1') so a future change of scheme stays distinguishable, and
+	 * chosen to be something a JSON document can never begin with — that is what
+	 * makes decode_revision() able to read old uncompressed revisions unchanged.
+	 */
+	const REVISION_GZ_PREFIX = 'gz1:';
+
+	/**
+	 * Compress a revision payload for storage.
+	 *
+	 * Builder model JSON is extremely repetitive — the same option keys recur for
+	 * every item — so it deflates by roughly an order of magnitude. base64 is
+	 * needed because postmeta is a utf8mb4 TEXT column and raw deflate output is
+	 * binary; it costs ~33%, which the deflate gain absorbs many times over.
+	 *
+	 * Falls back to the raw string if zlib is unavailable or compression fails to
+	 * pay for itself, so storage never gets bigger than before.
+	 *
+	 * @param string $json
+	 * @return string
+	 */
+	private function encode_revision( $json ) {
+		if ( ! function_exists( 'gzcompress' ) ) {
+			return $json;
+		}
+
+		$packed = @gzcompress( $json, 6 );
+
+		if ( false === $packed ) {
+			return $json;
+		}
+
+		$encoded = self::REVISION_GZ_PREFIX . base64_encode( $packed );
+
+		return strlen( $encoded ) < strlen( $json ) ? $encoded : $json;
+	}
+
+	/**
+	 * Read a stored revision payload back to JSON.
+	 *
+	 * Handles both forms: revisions written before compression existed are plain
+	 * JSON and are returned untouched. A payload that claims to be compressed but
+	 * fails to inflate returns '' rather than corrupt text, so a damaged row
+	 * surfaces as an empty revision instead of a broken page.
+	 *
+	 * @param string $stored
+	 * @return string
+	 */
+	private function decode_revision( $stored ) {
+		if ( ! is_string( $stored ) || 0 !== strpos( $stored, self::REVISION_GZ_PREFIX ) ) {
+			return is_string( $stored ) ? $stored : '';
+		}
+
+		$packed = base64_decode( substr( $stored, strlen( self::REVISION_GZ_PREFIX ) ), true );
+
+		if ( false === $packed || ! function_exists( 'gzuncompress' ) ) {
+			return '';
+		}
+
+		$json = @gzuncompress( $packed );
+
+		return false === $json ? '' : $json;
+	}
+
+	/**
+	 * One-time prune of revision history accumulated before the byte cap.
+	 *
+	 * Guarded by an option so it runs once per site. Finds the posts holding
+	 * revision meta with a single query, then re-trims each through the same
+	 * trim_revisions() path the save flow uses — so there is one definition of
+	 * "too much", not a second copy that can drift.
+	 *
+	 * Also deletes ORPHANED revision rows: meta whose key no longer appears in
+	 * its post's index. Those can never be read back or trimmed by the normal
+	 * path (trimming is driven by the index), so without this they would sit
+	 * there permanently.
+	 *
+	 * @internal
+	 */
+	public function _action_migrate_revision_budget() {
+		if ( get_option( 'fw_le_revision_budget_migrated_v2' ) ) {
+			return;
+		}
+
+		// Set first: a fatal midway must not re-run this on every admin page load.
+		update_option( 'fw_le_revision_budget_migrated_v2', 1, false );
+		delete_option( 'fw_le_revision_budget_migrated_v1' ); // superseded
+
+		global $wpdb;
+
+		$prefix   = self::REVISION_META_PREFIX;
+		$post_ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT DISTINCT post_id FROM {$wpdb->postmeta} WHERE meta_key LIKE %s",
+				$wpdb->esc_like( $prefix ) . '%'
+			)
+		);
+
+		foreach ( (array) $post_ids as $post_id ) {
+			$post_id = (int) $post_id;
+
+			$index = get_post_meta( $post_id, self::REVISIONS_INDEX_META, true );
+			$index = is_array( $index ) ? $index : array();
+
+			$index = $this->trim_revisions( $post_id, $index );
+			update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+
+			// Whatever the index still references is legitimate; anything else
+			// under the revision prefix is orphaned.
+			$keep = array( self::REVISIONS_INDEX_META );
+			foreach ( $index as $rev ) {
+				if ( ! empty( $rev['time'] ) ) {
+					$keep[] = $prefix . (int) $rev['time'];
+				}
+			}
+
+			$placeholders = implode( ',', array_fill( 0, count( $keep ), '%s' ) );
+			$wpdb->query(
+				$wpdb->prepare(
+					"DELETE FROM {$wpdb->postmeta}
+					 WHERE post_id = %d AND meta_key LIKE %s AND meta_key NOT IN ({$placeholders})",
+					array_merge( array( $post_id, $wpdb->esc_like( $prefix ) . '%' ), $keep )
+				)
+			);
+
+			// Compress what survived. Pruning alone barely helps a site whose pages
+			// carry multi-megabyte revisions, because REVISIONS_MIN_KEEP floors the
+			// count at 2 — measured on the demos install, pruning took 150.6 MB only
+			// to 115.4 MB. Real builder JSON deflates ~27x, so this is where the
+			// reduction actually comes from.
+			//
+			// One row at a time, read and written directly: get_post_meta() would
+			// prime the whole post's meta cache, which is the very cost being removed.
+			$index_changed = false;
+
+			foreach ( $index as $i => $rev ) {
+				if ( empty( $rev['time'] ) ) {
+					continue;
+				}
+
+				$key    = $prefix . (int) $rev['time'];
+				$stored = $wpdb->get_var(
+					$wpdb->prepare(
+						"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s LIMIT 1",
+						$post_id,
+						$key
+					)
+				);
+
+				if ( ! is_string( $stored ) || 0 === strpos( $stored, self::REVISION_GZ_PREFIX ) ) {
+					continue; // missing, or already compressed
+				}
+
+				$packed = $this->encode_revision( $stored );
+
+				if ( $packed === $stored ) {
+					continue; // compression did not pay off
+				}
+
+				$wpdb->update(
+					$wpdb->postmeta,
+					array( 'meta_value' => $packed ),
+					array( 'post_id' => $post_id, 'meta_key' => $key ),
+					array( '%s' ),
+					array( '%d', '%s' )
+				);
+
+				$index[ $i ]['bytes'] = strlen( $packed );
+				$index_changed        = true;
+
+				unset( $stored, $packed );
+			}
+
+			if ( $index_changed ) {
+				update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+			}
+
+			wp_cache_delete( $post_id, 'post_meta' );
+		}
+	}
+
+	/**
+	 * Trim a revision index to both caps, deleting the meta rows it drops.
+	 *
+	 * Count first (cheap, exact), then bytes. Returns the trimmed index; the
+	 * caller persists it. Newest-first ordering is assumed, matching store_revision().
+	 *
+	 * @param int   $post_id
+	 * @param array $index
+	 * @return array
+	 */
+	private function trim_revisions( $post_id, array $index ) {
+		$drop = array();
 
 		if ( count( $index ) > self::REVISIONS_MAX ) {
 			foreach ( array_slice( $index, self::REVISIONS_MAX ) as $old ) {
-				if ( ! empty( $old['time'] ) ) {
-					delete_post_meta( $post_id, self::REVISION_META_PREFIX . (int) $old['time'] );
-				}
+				$drop[] = $old;
 			}
 			$index = array_slice( $index, 0, self::REVISIONS_MAX );
 		}
 
-		update_post_meta( $post_id, self::REVISIONS_INDEX_META, $index );
+		/**
+		 * Total stored bytes allowed per post for revision history.
+		 *
+		 * @param int $bytes   Default REVISIONS_MAX_BYTES.
+		 * @param int $post_id
+		 */
+		$budget = (int) apply_filters( 'fw_le_revisions_max_bytes', self::REVISIONS_MAX_BYTES, $post_id );
+
+		if ( $budget > 0 ) {
+			$index = $this->backfill_revision_sizes( $post_id, $index );
+
+			$running = 0;
+			$keep    = array();
+
+			foreach ( $index as $i => $rev ) {
+				$running += isset( $rev['bytes'] ) ? (int) $rev['bytes'] : 0;
+
+				// The floor beats the budget: never leave a page with no usable
+				// history just because its revisions are large.
+				if ( $i < self::REVISIONS_MIN_KEEP || $running <= $budget ) {
+					$keep[] = $rev;
+				} else {
+					$drop[] = $rev;
+				}
+			}
+
+			$index = $keep;
+		}
+
+		foreach ( $drop as $old ) {
+			if ( ! empty( $old['time'] ) ) {
+				delete_post_meta( $post_id, self::REVISION_META_PREFIX . (int) $old['time'] );
+			}
+		}
+
+		return $index;
+	}
+
+	/**
+	 * Fill in 'bytes' for index entries written before it was recorded.
+	 *
+	 * Sizes come from ONE direct LENGTH() query rather than get_post_meta() per
+	 * revision: get_post_meta() would prime the post's whole meta cache — tens of
+	 * megabytes on exactly the posts this cap targets — to learn a number MySQL
+	 * can report without sending the payload at all.
+	 *
+	 * @param int   $post_id
+	 * @param array $index
+	 * @return array
+	 */
+	private function backfill_revision_sizes( $post_id, array $index ) {
+		$missing = array();
+
+		foreach ( $index as $rev ) {
+			if ( ! isset( $rev['bytes'] ) && ! empty( $rev['time'] ) ) {
+				$missing[] = self::REVISION_META_PREFIX . (int) $rev['time'];
+			}
+		}
+
+		if ( ! $missing ) {
+			return $index;
+		}
+
+		global $wpdb;
+
+		$placeholders = implode( ',', array_fill( 0, count( $missing ), '%s' ) );
+		$rows         = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT meta_key, LENGTH(meta_value) AS len FROM {$wpdb->postmeta}
+				 WHERE post_id = %d AND meta_key IN ({$placeholders})",
+				array_merge( array( $post_id ), $missing )
+			),
+			ARRAY_A
+		);
+
+		$sizes = array();
+		foreach ( (array) $rows as $row ) {
+			$sizes[ $row['meta_key'] ] = (int) $row['len'];
+		}
+
+		foreach ( $index as $i => $rev ) {
+			if ( ! isset( $rev['bytes'] ) && ! empty( $rev['time'] ) ) {
+				$key                    = self::REVISION_META_PREFIX . (int) $rev['time'];
+				$index[ $i ]['bytes'] = isset( $sizes[ $key ] ) ? $sizes[ $key ] : 0;
+			}
+		}
+
+		return $index;
 	}
 
 	/**
@@ -1785,8 +2103,11 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	public function _ajax_revision_get() {
 		$post_id = $this->verify_ajax();
 
-		$id   = (int) FW_Request::POST( 'id' );
-		$json = $id ? get_post_meta( $post_id, self::REVISION_META_PREFIX . $id, true ) : '';
+		$id     = (int) FW_Request::POST( 'id' );
+		$stored = $id ? get_post_meta( $post_id, self::REVISION_META_PREFIX . $id, true ) : '';
+
+		// Revisions may be stored compressed or (pre-2.16.20) as raw JSON.
+		$json = $this->decode_revision( $stored );
 
 		if ( ! is_string( $json ) || $json === '' || json_decode( $json, true ) === null ) {
 			wp_send_json_error( array( 'message' => __( 'Revision not found.', 'fw' ) ) );
