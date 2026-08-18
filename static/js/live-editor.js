@@ -76,7 +76,7 @@
 
 	function isContainer( node ) {
 		var t = node.type;
-		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
+		return t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
 	}
 
 	// Preview device → the responsive_hide choice key ("Hide on") that hides at
@@ -595,6 +595,22 @@
 				groups[ tab ].push( el );
 			} );
 
+			// Order the groups to mirror the backend Page Builder: Content Elements leads
+
+			// (the Add panel is content-first), then Media / Interactive / Components in the
+
+			// same relative order the backend uses, with Layout + the rest after.
+
+			var TAB_ORDER = { 'Content Elements': 1, 'Media Elements': 2, 'Interactive Elements': 3, 'Components': 4, 'Layout Elements': 5, 'Structure': 6, 'Dynamic Content': 7, 'Header/Footer Elements': 8 };
+
+			order.sort( function ( a, b ) {
+
+				var ia = TAB_ORDER[ a ] || 100, ib = TAB_ORDER[ b ] || 100;
+
+				return ia !== ib ? ia - ib : a.localeCompare( b );
+
+			} );
+
 			order.forEach( function ( tab ) {
 				var $grp = $( '<div class="fw-le-panel__group"><div class="fw-le-panel__grouptitle"></div><div class="fw-le-panel__tiles"></div></div>' );
 				$grp.find( '.fw-le-panel__grouptitle' ).text( tab );
@@ -814,30 +830,47 @@
 				'</div>'
 			).appendTo( 'body' );
 
-			// Build the width tiles (widest → narrowest). The grid is twelfths, but a
-			// column also supports the single fifth 1_5 (20%, renders as fw-col-sm-15) —
-			// it isn't a twelfth, so slot it between 1/4 (25%) and 1/6 (16.7%).
-			var tiles = [];
-			for ( var tw = 12; tw >= 1; tw-- ) {
-				tiles.push( { id: GRID_ID[ tw ], flex: tw, pct: Math.round( ( tw / 12 ) * 100 ) } );
-				if ( tw === 3 ) { tiles.push( { id: '1_5', flex: 2.4, pct: 20 } ); }
-			}
+			// Build the width tiles in the SAME order the backend Page Builder's Layout
+			// Elements tab uses (halves, thirds, quarters, sixths, twelfths, the four
+			// fifths, then Auto Column), so the two palettes match.
+			var tiles = [
+				{ id: '1_1',   flex: 12,  pct: 100 },
+				{ id: '1_2',   flex: 6,   pct: 50 },
+				{ id: '1_3',   flex: 4,   pct: 33 },
+				{ id: '2_3',   flex: 8,   pct: 67 },
+				{ id: '1_4',   flex: 3,   pct: 25 },
+				{ id: '3_4',   flex: 9,   pct: 75 },
+				{ id: '1_6',   flex: 2,   pct: 17 },
+				{ id: '5_6',   flex: 10,  pct: 83 },
+				{ id: '1_12',  flex: 1,   pct: 8 },
+				{ id: '5_12',  flex: 5,   pct: 42 },
+				{ id: '7_12',  flex: 7,   pct: 58 },
+				{ id: '11_12', flex: 11,  pct: 92 },
+				{ id: '1_5',   flex: 2.4, pct: 20 },
+				{ id: '2_5',   flex: 4.8, pct: 40 },
+				{ id: '3_5',   flex: 7.2, pct: 60 },
+				{ id: '4_5',   flex: 9.6, pct: 80 },
+				{ id: 'col',   flex: 12,  pct: null, label: 'Auto Column', auto: true },
+				{ id: 'container', flex: 12, pct: null, label: 'Container', container: true }
+			]
 
 			var $grid = $pick.find( '.fw-le-picker__grid' );
 			for ( var i = 0; i < tiles.length; i++ ) {
 				var t = tiles[ i ];
 				var $tile = $(
-					'<button type="button" class="fw-le-picker__tile fw-le-coltile">' +
+					'<button type="button" class="fw-le-picker__tile fw-le-coltile' + ( t.auto ? ' fw-le-coltile--auto' : '' ) + ( t.container ? ' fw-le-coltile--container' : '' ) + '">' +
 						'<span class="fw-le-picker__cols"><span style="flex:' + t.flex + '"></span><span class="fw-le-coltile__rest" style="flex:' + ( 12 - t.flex ) + '"></span></span>' +
-						'<span class="fw-le-coltile__lbl">' + fracOf( t.id ) + '</span>' +
+						'<span class="fw-le-coltile__lbl">' + ( t.label || fracOf( t.id ) ) + '</span>' +
 					'</button>'
 				);
-				$tile.attr( 'data-width', t.id ).attr( 'title', fracOf( t.id ) + '  (' + t.pct + '%)' );
+				$tile.attr( 'data-width', t.id ).attr( 'title', ( t.label || fracOf( t.id ) ) + ( t.pct != null ? '  (' + t.pct + '%)' : '' ) );
 				$grid.append( $tile );
 			}
 
 			$grid.on( 'click', '.fw-le-coltile', function () {
-				self.addColumn( sectionId, $( this ).attr( 'data-width' ) );
+				var _w = $( this ).attr( 'data-width' );
+				if ( _w === 'container' ) { self.addContainer( sectionId ); }
+				else { self.addColumn( sectionId, _w ); }
 				$pick.remove();
 				self.$.colPicker = null;
 			} );
@@ -871,6 +904,7 @@
 				self.rebuildIndex();
 				self.markDirty();
 				self.syncFrameModel();
+				self.refreshNavigator();
 
 				self.ajax( cfg.actions.renderItem, { item: JSON.stringify( section ) }, function ( r ) {
 					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
@@ -879,6 +913,42 @@
 							html:     r.data.html,
 							selectId: newColId   // select + scroll to the new column
 						} );
+					}
+				} );
+			} );
+		},
+
+		/** Append a Container (a section-level structural wrapper) to a section — like
+		 *  the backend Layout Elements "Container". It ships with one full-width column;
+		 *  the page-builder's items-corrector lifts the section's loose columns into a
+		 *  default container so the new Container sits beside them. */
+		addContainer: function ( sectionId ) {
+			var entry = sectionId && this.index[ sectionId ];
+			if ( ! entry || ! isContainer( entry.node ) ) { return; }
+			var section = entry.node;
+			var self = this;
+			this.ajax( cfg.actions.newContainer, {}, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new container failed', resp );
+					return;
+				}
+				var container = resp.data.item;
+				var newId = ( container.atts && container.atts.unique_id ) || container.unique_id;
+				self.recordHistory();
+				// Flatten the section to LOOSE columns + this container as a section-level
+				// sibling. Leaving a bare synthesized row beside the container makes the
+				// items-corrector mis-wrap it (the container ends up nested inside a column,
+				// whose inner [column] then collides with the parent column tag and leaks
+				// [/container][/column]). Loose columns are exactly what the corrector expects.
+				var _cols = columnArrayOf( section ).slice();
+				section._items = _cols.concat( [ container ] );
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+				self.refreshNavigator();
+				self.ajax( cfg.actions.renderItem, { item: JSON.stringify( section ) }, function ( r ) {
+					if ( r && r.success && r.data && typeof r.data.html === 'string' ) {
+						self.toFrame( 'replace', { id: sectionId, html: r.data.html, selectId: newId } );
 					}
 				} );
 			} );
@@ -933,6 +1003,7 @@
 				if ( e.target.closest( '.fw-le-tree__toggle' ) || e.target.closest( '.fw-le-tree__tail' ) || e.target.closest( '.fw-le-nav__rename' ) ) { return; }
 				var node = this.closest( '.fw-le-tree__node' );
 				if ( ! node ) { return; }
+				if ( node.getAttribute( 'data-default' ) ) { self.toFrame( 'select-item', { id: node.getAttribute( 'data-section' ) } ); return; }
 				var cid = node.getAttribute( 'data-id' );
 				if ( e.shiftKey && self._selAnchor ) { self.treeSelectRange( self._selAnchor, cid ); }
 				else if ( e.ctrlKey || e.metaKey ) { self.treeToggleMulti( cid ); }
@@ -999,6 +1070,12 @@
 				e.stopPropagation();
 				var n = this.closest( '.fw-le-tree__node' );
 				if ( n ) { self.addChildTo( n.getAttribute( 'data-id' ) ); }
+			} );
+
+			$body.on( 'click', '.fw-le-tree__act--addcol', function ( e ) {
+				e.stopPropagation();
+				var target = this.getAttribute( 'data-target' );
+				if ( target ) { self.openColumnPicker( target ); }
 			} );
 			$body.on( 'click', '.fw-le-tree__act--dup', function ( e ) {
 				e.stopPropagation();
@@ -1198,6 +1275,7 @@
 			var t = ( n && n.getAttribute && n.getAttribute( 'data-type' ) ) || '';
 			if ( /section$/.test( t ) ) { return 'section'; }
 			if ( t === 'column' ) { return 'column'; }
+			if ( t === 'container' ) { return 'container'; }
 			return 'element';
 		},
 
@@ -1207,7 +1285,8 @@
 			if ( containerEl.classList.contains( 'fw-le-nav__body' ) ) { return cat === 'section'; }
 			var owner = containerEl.closest( '.fw-le-tree__node' );
 			var ot = owner ? ( owner.getAttribute( 'data-type' ) || '' ) : '';
-			if ( cat === 'column' ) { return /section$/.test( ot ); }
+			if ( cat === 'container' ) { return /section$/.test( ot ); }
+			if ( cat === 'column' ) { return /section$/.test( ot ) || ot === 'container'; }
 			if ( cat === 'element' ) { return ot === 'column'; }
 			return false;
 		},
@@ -1395,7 +1474,7 @@
 					pts.push( { y: r.bottom, container: n.parentNode, ref: n.nextElementSibling } );
 				}
 				var nt = n.getAttribute( 'data-type' ) || '';
-				var validParent = ( cat === 'element' && nt === 'column' ) || ( cat === 'column' && /section$/.test( nt ) );
+				var validParent = ( cat === 'element' && nt === 'column' ) || ( cat === 'column' && ( /section$/.test( nt ) || nt === 'container' ) );
 				if ( validParent ) {
 					var kidsBox = n.querySelector( ':scope > .fw-le-tree__children' );
 					var hasCatKid = kidsBox && Array.prototype.some.call( kidsBox.children, function ( c ) {
@@ -1476,7 +1555,8 @@
 				} else {
 					// A column or element — reorder within its parent node.
 					var parentNode = d.container.closest( '.fw-le-tree__node' );
-					this.moveNavItem( d.id, parentNode ? parentNode.getAttribute( 'data-id' ) : null, beforeId );
+				var _pid = parentNode ? ( parentNode.getAttribute( 'data-default' ) ? parentNode.getAttribute( 'data-section' ) : parentNode.getAttribute( 'data-id' ) ) : null;
+				this.moveNavItem( d.id, _pid, beforeId );
 				}
 		},
 
@@ -1569,8 +1649,23 @@
 		 *  (unwrapping any row); every other container shows its `_items`. */
 		treeChildrenOf: function ( node ) {
 			if ( ! node ) { return []; }
-			if ( /section$/.test( node.type || '' ) ) { return columnArrayOf( node ); }
+			if ( /section$/.test( node.type || '' ) ) {
+				var cols = columnArrayOf( node ).filter( function ( c ) { return c && c.type === 'column'; } );
+				var out = [ this._defaultContainerNode( node, cols ) ];
+				( node._items || [] ).forEach( function ( c ) { if ( c && c.type === 'container' ) { out.push( c ); } } );
+				return out;
+			}
+			if ( node.type === 'container' ) {
+				return columnArrayOf( node ).filter( function ( c ) { return c && c.type === 'column'; } );
+			}
 			return node._items || [];
+		},
+
+		/** Synthetic default-container node grouping a section's own columns — presentation
+		 *  only (non-draggable, non-deletable); you can still add columns to it. */
+		_defaultContainerNode: function ( section, cols ) {
+			var sid = ( section.atts && section.atts.unique_id ) || section.unique_id;
+			return { type: 'container', _default: true, _sectionId: sid, _items: cols, atts: { unique_id: '__defcont__' + sid } };
 		},
 
 		/** A dashicon name for a tree row, by container type or leaf shortcode. */
@@ -1579,6 +1674,7 @@
 			if ( t === 'masonry_section' ) { return 'grid-view'; }
 			if ( /section$/.test( t ) ) { return 'align-wide'; }
 			if ( t === 'column' ) { return 'columns'; }
+			if ( t === 'container' ) { return 'archive'; }
 			if ( t === 'row' ) { return 'menu'; }
 			var map = {
 				text_block: 'editor-paragraph', special_heading: 'heading', media_image: 'format-image',
@@ -1595,6 +1691,8 @@
 			var id = ( node.atts && node.atts.unique_id ) || node.unique_id;
 			if ( ! id ) { return null; }
 			var isSection = /section$/.test( node.type || '' );
+			var isDefault = node._default === true;
+			var isCont = node.type === 'container';
 			var kids = this.treeChildrenOf( node ).filter( function ( c ) {
 				return c && ( ( c.atts && c.atts.unique_id ) || c.unique_id );
 			} );
@@ -1604,7 +1702,8 @@
 				.attr( 'data-id', id )
 				.attr( 'data-type', node.type || '' );
 			if ( isSection ) { $node.addClass( 'fw-le-tree__node--section' ); }
-				if ( this._navCollapsed && this._navCollapsed[ id ] ) { $node.addClass( 'is-collapsed' ); }
+			if ( isDefault ) { $node.addClass( 'fw-le-tree__node--default' ).attr( 'data-default', '1' ).attr( 'data-section', node._sectionId ); }
+			if ( this._navCollapsed && this._navCollapsed[ id ] ) { $node.addClass( 'is-collapsed' ); }
 
 			var $row = $( '<div class="fw-le-tree__row"/>' ).css( 'padding-left', ( 4 + depth * 13 ) + 'px' );
 			$row.append( hasKids
@@ -1626,10 +1725,19 @@
 			// Drag grip at the far right of every row, revealed on hover — reorders
 				// the node among its siblings (section, column, or element).
 				var _hidden = this.isNodeHidden( node );
-		var _add = node.type === 'column' ? '<button type="button" class="fw-le-tree__act fw-le-tree__act--add dashicons dashicons-plus-alt2" title="Add element"></button>' : '';
-		var _locked = this.isNodeLocked( node );
-		if ( _locked ) { $node.addClass( 'is-locked' ); }
-		var _lockBtn = '<button type="button" class="fw-le-tree__act fw-le-tree__act--lock dashicons dashicons-' + ( _locked ? 'lock' : 'unlock' ) + '" title="' + ( _locked ? 'Unlock' : 'Lock' ) + '"></button>';
+			var _add = '';
+			if ( node.type === 'column' ) {
+				_add = '<button type="button" class="fw-le-tree__act fw-le-tree__act--add dashicons dashicons-plus-alt2" title="Add element"></button>';
+			} else if ( isCont ) {
+				var _addTarget = isDefault ? node._sectionId : id;
+				_add = '<button type="button" class="fw-le-tree__act fw-le-tree__act--addcol dashicons dashicons-plus-alt2" data-target="' + _addTarget + '" title="Add column"></button>';
+			}
+			if ( isDefault ) {
+				$row.append( '<span class="fw-le-tree__tail">' + _add + '</span>' );
+			} else {
+				var _locked = this.isNodeLocked( node );
+				if ( _locked ) { $node.addClass( 'is-locked' ); }
+				var _lockBtn = '<button type="button" class="fw-le-tree__act fw-le-tree__act--lock dashicons dashicons-' + ( _locked ? 'lock' : 'unlock' ) + '" title="' + ( _locked ? 'Unlock' : 'Lock' ) + '"></button>';
 				if ( _hidden ) { $node.addClass( 'is-hidden' ); }
 				$row.append(
 					'<span class="fw-le-tree__tail">' + _add + _lockBtn +
@@ -1639,6 +1747,7 @@
 						'<span class="fw-le-tree__grip dashicons dashicons-menu" title="Drag to reorder"></span>' +
 					'</span>'
 				);
+			}
 			$node.append( $row );
 
 			if ( hasKids ) {

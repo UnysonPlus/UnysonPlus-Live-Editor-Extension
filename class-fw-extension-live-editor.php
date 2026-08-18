@@ -85,6 +85,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_new_item', array( $this, '_ajax_new_item' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_section', array( $this, '_ajax_new_section' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_column', array( $this, '_ajax_new_column' ) );
+		add_action( 'wp_ajax_fw_live_editor_new_container', array( $this, '_ajax_new_container' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
@@ -796,6 +797,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'newItem'     => 'fw_live_editor_new_item',
 				'newSection'  => 'fw_live_editor_new_section',
 				'newColumn'   => 'fw_live_editor_new_column',
+				'newContainer' => 'fw_live_editor_new_container',
 				'renderPage'  => 'fw_live_editor_render_page',
 				'save'        => 'fw_live_editor_save',
 				'autosave'    => 'fw_live_editor_autosave',
@@ -1615,6 +1617,31 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'width'  => $width,
 			'atts'   => $column_atts,
 			'_items' => array(),
+		);
+	}
+
+	public function _ajax_new_container() {
+		$post_id = $this->verify_ajax();
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+
+		if ( ! $sc ) {
+			wp_send_json_error( array( 'message' => __( 'Shortcodes unavailable.', 'fw' ) ) );
+		}
+
+		wp_send_json_success( array( 'item' => $this->build_container_item( $sc ) ) );
+	}
+
+	/** Build a default Container item (a section-level structural wrapper). It ships
+	 *  with one full-width column so it is usable the moment it is added. */
+	private function build_container_item( $sc ) {
+		$atts = $this->default_atts( $sc, 'container' );
+		$atts['unique_id'] = fw_rand_md5();
+
+		return array(
+			'type'   => 'container',
+			'atts'   => $atts,
+			'_items' => array( $this->build_column_item( $sc, '1_1' ) ),
 		);
 	}
 

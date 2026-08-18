@@ -145,7 +145,7 @@
 	}
 
 	function isContainerType( t ) {
-		return t === 'column' || t === 'row' || t === 'section' || /section$/.test( t );
+		return t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
 	}
 
 	// Preview device → the responsive_hide ("Hide on") key that hides at that
@@ -159,47 +159,54 @@
 		return !! ( rh && rh[ DEVICE_HIDE[ device ] || DEVICE_HIDE.desktop ] );
 	}
 
-	// The page-builder 12-column grid: N twelfths → { width fraction id, the
-	// frontend grid classes }. Mirrors framework/extensions/builder/config.php
-	// `grid.columns` (the integer-twelfth widths; the odd 1/5 = sm-15 is omitted
-	// so a drag snaps cleanly to 1…12).
-	var GRID = {
-		1:  { id: '1_12',  cls: 'fw-col-12 fw-col-sm-1' },
-		2:  { id: '1_6',   cls: 'fw-col-12 fw-col-sm-2' },
-		3:  { id: '1_4',   cls: 'fw-col-12 fw-col-sm-3' },
-		4:  { id: '1_3',   cls: 'fw-col-12 fw-col-sm-4' },
-		5:  { id: '5_12',  cls: 'fw-col-12 fw-col-sm-5' },
-		6:  { id: '1_2',   cls: 'fw-col-12 fw-col-sm-6' },
-		7:  { id: '7_12',  cls: 'fw-col-12 fw-col-sm-7' },
-		8:  { id: '2_3',   cls: 'fw-col-12 fw-col-sm-8' },
-		9:  { id: '3_4',   cls: 'fw-col-12 fw-col-sm-9' },
-		10: { id: '5_6',   cls: 'fw-col-12 fw-col-sm-10' },
-		11: { id: '11_12', cls: 'fw-col-12 fw-col-sm-11' },
-		12: { id: '1_1',   cls: 'fw-col-12' }
+	// The page-builder grid, expressed in SIXTIETHS (LCM of 12 and 5) so BOTH the
+	// twelfths (1/12 … 12/12) AND the fifths (1/5, 2/5, 3/5, 4/5 = fw-col-sm-15/25/35/45,
+	// = 20/40/60/80%) the backend builder supports are snap targets. Mirrors
+	// framework/extensions/builder/config.php + frontend-grid.css. width60 -> { id, cls }.
+	var WIDTH60 = {
+		5:  { id: '1_12',  cls: 'fw-col-12 fw-col-sm-1' },
+		10: { id: '1_6',   cls: 'fw-col-12 fw-col-sm-2' },
+		12: { id: '1_5',   cls: 'fw-col-12 fw-col-sm-15' },
+		15: { id: '1_4',   cls: 'fw-col-12 fw-col-sm-3' },
+		20: { id: '1_3',   cls: 'fw-col-12 fw-col-sm-4' },
+		24: { id: '2_5',   cls: 'fw-col-12 fw-col-sm-25' },
+		25: { id: '5_12',  cls: 'fw-col-12 fw-col-sm-5' },
+		30: { id: '1_2',   cls: 'fw-col-12 fw-col-sm-6' },
+		35: { id: '7_12',  cls: 'fw-col-12 fw-col-sm-7' },
+		36: { id: '3_5',   cls: 'fw-col-12 fw-col-sm-35' },
+		40: { id: '2_3',   cls: 'fw-col-12 fw-col-sm-8' },
+		45: { id: '3_4',   cls: 'fw-col-12 fw-col-sm-9' },
+		48: { id: '4_5',   cls: 'fw-col-12 fw-col-sm-45' },
+		50: { id: '5_6',   cls: 'fw-col-12 fw-col-sm-10' },
+		55: { id: '11_12', cls: 'fw-col-12 fw-col-sm-11' },
+		60: { id: '1_1',   cls: 'fw-col-12' }
 	};
+	// Snap targets, ascending (twelfths as multiples of 5, fifths as 12/24/36/48).
+	var ALLOWED60 = [ 5, 10, 12, 15, 20, 24, 25, 30, 35, 36, 40, 45, 48, 50, 55, 60 ];
 
-	/** Human label for a twelfths value — the reduced fraction the builder uses
-	 *  (e.g. 6 → "1/2", 4 → "1/3", 8 → "2/3"), not the raw "/12" form. */
-	function fracLabel( twelfths ) {
-		var g = GRID[ twelfths ];
-		return g ? g.id.replace( '_', '/' ) : ( twelfths + '/12' );
+	/** Human label for a width60 — the reduced fraction id ("30" -> "1/2", "12" -> "1/5"). */
+	function widthLabel( w60 ) {
+		var g = WIDTH60[ w60 ];
+		return g ? g.id.replace( '_', '/' ) : '';
 	}
 
-	/** Read a column element's current width in twelfths from its grid classes. */
-	function colTwelfths( el ) {
-		var cn = el.className || '';
-		var m  = cn.match( /fw-col-sm-(\d+)/ );
+	/** Read a column element's current width in sixtieths from its grid classes. */
+	function colWidth60( el ) {
+		var m = ( el.className || '' ).match( /fw-col-sm-(\d+)/ );
 		if ( m ) {
 			var n = parseInt( m[ 1 ], 10 );
-			if ( n >= 1 && n <= 12 ) { return n; }
-			if ( n === 15 ) { return 2; } // 1/5 ≈ rounds into the grid
+			if ( n === 15 ) { return 12; } // 1/5
+			if ( n === 25 ) { return 24; } // 2/5
+			if ( n === 35 ) { return 36; } // 3/5
+			if ( n === 45 ) { return 48; } // 4/5
+			if ( n >= 1 && n <= 12 ) { return n * 5; } // twelfths
 		}
-		return 12; // plain fw-col-12 (full) or fw-col (auto)
+		return 60; // plain fw-col-12 (full) or fw-col (auto)
 	}
 
-	/** Replace a column element's grid classes with those for `twelfths` (1…12). */
-	function applyColWidth( el, twelfths ) {
-		var g = GRID[ twelfths ];
+	/** Replace a column element's grid classes with those for `w60`. */
+	function applyColWidth( el, w60 ) {
+		var g = WIDTH60[ w60 ];
 		if ( ! g ) { return; }
 		var kept = ( el.className || '' ).split( /\s+/ ).filter( function ( c ) {
 			return c && c !== 'fw-col-12' && ! /^fw-col(-sm-\w+)?$/.test( c );
@@ -625,12 +632,12 @@
 				id:      this.activeId,
 				sib:     sib || null,
 				sibId:   sib ? sib.getAttribute( 'data-fw-item-id' ) : null,
-				startTw: colTwelfths( col ),
+				startW60: colWidth60( col ),
 				rowRect: row.getBoundingClientRect(),
 				colLeft: col.getBoundingClientRect().left,
-				curTw:   0
+				curW:    0
 			};
-			r.combined = r.startTw + ( sib ? colTwelfths( sib ) : 0 );
+			r.combined = r.startW60 + ( sib ? colWidth60( sib ) : 0 );
 
 			r.move = function ( ev ) { self.onColResizeMove( ev ); };
 			r.up   = function ( ev ) { self.onColResizeUp( ev ); };
@@ -649,18 +656,33 @@
 			if ( ! r ) { return; }
 			e.preventDefault();
 
-			var tw = Math.round( ( e.clientX - r.colLeft ) / r.rowRect.width * 12 );
+			var pos = ( e.clientX - r.colLeft ) / r.rowRect.width * 60;
 
 			if ( r.sib ) {
-				tw = Math.max( 1, Math.min( r.combined - 1, tw ) );
-				r.curTw    = tw;
-				r.curSibTw = r.combined - tw;
-				applyColWidth( r.col, r.curTw );
-				applyColWidth( r.sib, r.curSibTw );
+				// Snap to the (col, sib) pair — BOTH must be real grid widths — whose col
+				// is nearest the cursor. Fifths thus appear only where the sibling can also
+				// take a real width (e.g. a full row: 1/5<->4/5, 2/5<->3/5), never leaving the
+				// sibling at an unrepresentable size.
+				var best = null, bestD = Infinity, i, w, sib60, d;
+				for ( i = 0; i < ALLOWED60.length; i++ ) {
+					w = ALLOWED60[ i ]; sib60 = r.combined - w;
+					if ( ! WIDTH60[ w ] || ! WIDTH60[ sib60 ] ) { continue; }
+					d = Math.abs( w - pos );
+					if ( d < bestD ) { bestD = d; best = w; }
+				}
+				if ( best === null ) { return; }
+				r.curW    = best;
+				r.curSibW = r.combined - best;
+				applyColWidth( r.col, r.curW );
+				applyColWidth( r.sib, r.curSibW );
 			} else {
-				tw = Math.max( 1, Math.min( 12, tw ) );
-				r.curTw = tw;
-				applyColWidth( r.col, r.curTw );
+				var b = null, bd = Infinity, j, w2, d2;
+				for ( j = 0; j < ALLOWED60.length; j++ ) {
+					w2 = ALLOWED60[ j ]; d2 = Math.abs( w2 - pos );
+					if ( d2 < bd ) { bd = d2; b = w2; }
+				}
+				r.curW = b;
+				applyColWidth( r.col, r.curW );
 			}
 
 			this.showResizeTip( e.clientX, e.clientY, r );
@@ -678,11 +700,11 @@
 			if ( this.els.resizeTip ) { this.els.resizeTip.style.display = 'none'; }
 
 			// Commit only on a real change.
-			if ( r.curTw && r.curTw !== r.startTw && GRID[ r.curTw ] ) {
-				var payload = { id: r.id, width: GRID[ r.curTw ].id };
-				if ( r.sib && r.curSibTw && GRID[ r.curSibTw ] ) {
+			if ( r.curW && r.curW !== r.startW60 && WIDTH60[ r.curW ] ) {
+				var payload = { id: r.id, width: WIDTH60[ r.curW ].id };
+				if ( r.sib && r.curSibW && WIDTH60[ r.curSibW ] ) {
 					payload.siblingId    = r.sibId;
-					payload.siblingWidth = GRID[ r.curSibTw ].id;
+					payload.siblingWidth = WIDTH60[ r.curSibW ].id;
 				}
 				this.toShell( 'resize-column', payload );
 			}
@@ -697,8 +719,8 @@
 			tip.style.left = ( x + 14 ) + 'px';
 			tip.style.top  = ( y - 10 ) + 'px';
 			tip.textContent = r.sib
-				? ( fracLabel( r.curTw ) + '  ·  ' + fracLabel( r.curSibTw ) )
-				: fracLabel( r.curTw );
+				? ( widthLabel( r.curW ) + '  ·  ' + widthLabel( r.curSibW ) )
+				: widthLabel( r.curW );
 		},
 
 		/* ---- drag to reorder (Phase B) --------------------------------- */
@@ -1311,7 +1333,16 @@
 				// section lands it in the theme's own section layout — which is often
 				// a flex/grid row, floating the zone to one side. Inside the column
 				// container it flows after the columns as a full-width bar.
-				var container = this.columnContainerOf( el ) || el;
+				// When the section holds a Container element, the add-column zone must sit
+				// AFTER the container band(s) — appending it into the first column's row would
+				// drop it ABOVE the container. Place it at the section level instead.
+				var hasContainer = false;
+				var _descs = el.querySelectorAll( '[data-fw-item-id]' );
+				for ( var _d = 0; _d < _descs.length; _d++ ) {
+					var _dm = this.index[ _descs[ _d ].getAttribute( 'data-fw-item-id' ) ];
+					if ( _dm && _dm.type === 'container' ) { hasContainer = true; break; }
+				}
+				var container = hasContainer ? el : ( this.columnContainerOf( el ) || el );
 				if ( container.querySelector( ':scope > .fw-le-addcol-zone' ) ) { continue; }
 
 				var sid  = el.getAttribute( 'data-fw-item-id' );
