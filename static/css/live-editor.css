@@ -110,18 +110,18 @@ body.fw-live-editor-shell {
 /* Auto-saved (recovery backup made) — distinct from a real save. */
 .fw-le-status[data-state="autosaved"] {
 	background: rgba(79, 140, 255, .16);
-	color: #8fb0ff;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff);
 }
 
 .fw-le-status[data-state="autosaved"]::before {
-	background: #4f8cff;
+	background: var(--fw-accent, #3858e9);
 }
 
 /* Selected-item readout (populated on select). */
 .fw-le-selected {
 	font-size: 12px;
 	font-weight: 600;
-	color: #9fc0ff;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 52%, #fff);
 	letter-spacing: .2px;
 }
 
@@ -143,7 +143,7 @@ body.fw-live-editor-shell {
 .fw-le-crumb {
 	background: none;
 	border: 0;
-	color: #9fc0ff;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 52%, #fff);
 	font-size: 12px;
 	font-weight: 600;
 	cursor: pointer;
@@ -197,12 +197,12 @@ body.fw-live-editor-shell {
 }
 
 .fw-le-btn--primary {
-	background: #4f8cff;
-	color: #fff;
+	background: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
 }
 
 .fw-le-btn--primary:hover:not([disabled]) {
-	background: #3d7bf0;
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 88%, #000);
 }
 
 .fw-le-btn[disabled] {
@@ -251,8 +251,8 @@ body.fw-live-editor-shell {
 .fw-le-device:hover { color: #fff; }
 
 .fw-le-device.is-active {
-	background: #4f8cff;
-	color: #fff;
+	background: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
 }
 
 .fw-le-device .dashicons {
@@ -366,8 +366,8 @@ body.fw-le-device-mobile .fw-le-frame { width: 375px; }
 }
 
 .fw-le-confirm__btn--ok {
-	background: #4f8cff;
-	color: #fff;
+	background: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
 }
 
 .fw-le-confirm__btn--ok.fw-le-confirm__btn--danger {
@@ -506,7 +506,7 @@ body.fw-le-history-open #fw-le-history { transform: translateX( 0 ); }
 	transition: opacity .12s ease, background .12s ease;
 }
 .fw-le-history__item:hover .fw-le-history__restore { opacity: 1; }
-.fw-le-history__restore:hover { background: #4a7cff; border-color: #4a7cff; color: #fff; }
+.fw-le-history__restore:hover { background: var(--fw-accent, #3858e9); border-color: var(--fw-accent, #3858e9); color:var(--fw-accent-fg, #fff); }
 
 /* ---- Section navigator ---------------------------------------------------- */
 
@@ -623,13 +623,19 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	border: 1px solid transparent;
 }
 .fw-le-tpl__body .save-template {
-	background: #4a7cff;
-	color: #fff;
-	border-color: #4a7cff;
+	background: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
+	border-color: var(--fw-accent, #3858e9);
 	flex: 1 1 100%;
 	text-align: center;
 }
-.fw-le-tpl__body .save-template:hover { background: #3b6cf0; }
+.fw-le-tpl__body .save-template:hover {
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 88%, #000);
+	/* Hold the label: only the BACKGROUND changes on hover, so without this the
+	 * text inherits a link-hover colour from the builder templates stylesheet
+	 * (a.template-export:hover), landing accent-on-accent. */
+	color: var(--fw-accent-fg, #fff);
+}
 .fw-le-tpl__body .import-template {
 	background: transparent;
 	color: #c4c7d0;
@@ -667,7 +673,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	text-overflow: ellipsis;
 	cursor: pointer;
 }
-.fw-le-tpl__body .template-title:hover { color: #8fb0ff; }
+.fw-le-tpl__body .template-title:hover { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); }
 
 /* Delete (×) + Export float on the right edge, revealed on row hover, sitting
  * over the title text (their background masks what's behind). × is rightmost. */
@@ -698,7 +704,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	opacity: 1;
 	pointer-events: auto;
 }
-.fw-le-tpl__body .template-export:hover { color: #8fb0ff; background: #34363f; }
+.fw-le-tpl__body .template-export:hover { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); background: #34363f; }
 .fw-le-tpl__body .template-delete:hover { color: #e0738a; background: #34363f; }
 .fw-le-tpl__body .template-delete.fw-x::before { content: "\f158"; font-family: dashicons; }
 
@@ -730,7 +736,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 
 .fw-le-nav__item:hover {
 	background: #333644;
-	border-color: #4f8cff;
+	border-color: var(--fw-accent, #3858e9);
 }
 
 .fw-le-nav__grip {
@@ -771,13 +777,13 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 /* The lifted clone follows the cursor; the original row becomes a dashed gap. */
 .fw-le-nav__clone {
 	box-shadow: 0 10px 30px rgba( 0, 0, 0, .5 );
-	border-color: #4f8cff !important;
+	border-color: var(--fw-accent, #3858e9) !important;
 	opacity: .97;
 }
 
 .fw-le-nav__placeholder {
 	background: rgba( 79, 140, 255, .08 ) !important;
-	border: 1px dashed #4f8cff !important;
+	border: 1px dashed var(--fw-accent, #3858e9) !important;
 }
 
 .fw-le-nav__placeholder > * { visibility: hidden; }
@@ -788,7 +794,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	height: 24px;
 	padding: 0 6px;
 	background: #1b1d24;
-	border: 1px solid #4f8cff;
+	border: 1px solid var(--fw-accent, #3858e9);
 	border-radius: 4px;
 	color: #fff;
 	font-size: 12px;
@@ -822,7 +828,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 .fw-le-tree__row.is-active {
 	background: rgba( 79, 140, 255, .18 );
 	color: #fff;
-	box-shadow: inset 2px 0 0 #4f8cff;
+	box-shadow: inset 2px 0 0 var(--fw-accent, #3858e9);
 }
 
 .fw-le-tree__toggle {
@@ -864,7 +870,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	font-size: 14px; width: 15px; height: 15px;
 	color: #8b90a0;
 }
-.fw-le-tree__node--section > .fw-le-tree__row .fw-le-tree__icon { color: #4f8cff; }
+.fw-le-tree__node--section > .fw-le-tree__row .fw-le-tree__icon { color: var(--fw-accent, #3858e9); }
 
 .fw-le-tree__label {
 	flex: 1 1 auto; min-width: 0;
@@ -897,7 +903,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
  * a lifted, outlined look so it reads as "held" while its siblings glide aside. */
 .fw-le-tree__node--grabbing > .fw-le-tree__row {
 	background: rgba( 79, 140, 255, .22 );
-	box-shadow: inset 0 0 0 1px #4f8cff, 0 4px 14px rgba( 0, 0, 0, .35 );
+	box-shadow: inset 0 0 0 1px var(--fw-accent, #3858e9), 0 4px 14px rgba( 0, 0, 0, .35 );
 	border-radius: 5px;
 }
 .fw-le-tree--reordering { cursor: grabbing; }
@@ -920,7 +926,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	transition: color .12s ease, background .12s ease;
 }
 .fw-le-nav__collapse-all:hover { color: #fff; background: #34363f; }
-.fw-le-nav__collapse-all.is-expanded { color: #4f8cff; }
+.fw-le-nav__collapse-all.is-expanded { color: var(--fw-accent, #3858e9); }
 
 /* ---- Tree right-click context menu ---- */
 .fw-le-tree-menu {
@@ -1042,7 +1048,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 
 .fw-le-tile:hover {
 	background: #333644;
-	border-color: #4f8cff;
+	border-color: var(--fw-accent, #3858e9);
 }
 
 .fw-le-tile__icon {
@@ -1051,7 +1057,7 @@ body.fw-le-tpl-open #fw-le-templates { transform: translateX( 0 ); }
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	color: #9fc0ff;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 52%, #fff);
 }
 
 .fw-le-tile__icon svg,
@@ -1166,6 +1172,17 @@ body.fw-live-editor-shell .media-modal *,
 body.fw-live-editor-shell .media-modal *::before,
 body.fw-live-editor-shell .media-modal *::after {
 	box-sizing: border-box;
+}
+
+/* The media modal's TOOLBAR is authored for content-box even inside wp-admin:
+ * media-views.css declares `.media-modal * { box-sizing: content-box }`. The bar
+ * sets height:48px and expects its 12px padding OUTSIDE that -- 72px of room for
+ * the 32px filter selects. Folding the padding inward clamps it to 48px and
+ * clips them. The BAR only: including `*` flips the controls too and their
+ * padding then adds outside their height (search field 32px -> 48px). */
+body.fw-live-editor-shell .media-modal .media-toolbar,
+body.fw-live-editor-shell .media-modal .media-frame-toolbar {
+	box-sizing: content-box;
 }
 
 body.fw-live-editor-shell .wp-editor-tabs,
@@ -1322,12 +1339,12 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
 
-.fw-le-picker__type:hover { border-color: #4f8cff; color: #1e1f26; }
+.fw-le-picker__type:hover { border-color: var(--fw-accent, #3858e9); color: #1e1f26; }
 
 .fw-le-picker__type.is-active {
-	background: #4f8cff;
-	border-color: #4f8cff;
-	color: #fff;
+	background: var(--fw-accent, #3858e9);
+	border-color: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
 }
 
 .fw-le-picker__grid {
@@ -1350,8 +1367,8 @@ body.fw-live-editor-shell .media-modal-backdrop {
 }
 
 .fw-le-picker__tile:hover {
-	background: #eef3ff;
-	border-color: #4f8cff;
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 10%, #fff);
+	border-color: var(--fw-accent, #3858e9);
 	transform: translateY( -1px );
 }
 
@@ -1363,11 +1380,11 @@ body.fw-live-editor-shell .media-modal-backdrop {
 }
 
 .fw-le-picker__cols span {
-	background: #c2cbe0;
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 22%, #fff);
 	border-radius: 3px;
 }
 
-.fw-le-picker__tile:hover .fw-le-picker__cols span { background: #4f8cff; }
+.fw-le-picker__tile:hover .fw-le-picker__cols span { background: var(--fw-accent, #3858e9); }
 
 /* Column-width picker (single-column tiles with a label). */
 .fw-le-picker__grid--col {
@@ -1396,7 +1413,7 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	color: #4b4f5c;
 }
 
-.fw-le-coltile:hover .fw-le-coltile__lbl { color: #2756b0; }
+.fw-le-coltile:hover .fw-le-coltile__lbl { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #000); }
 
 @media ( max-width: 600px ) {
 	.fw-le-picker__grid { grid-template-columns: repeat( 3, 1fr ); }
@@ -1409,8 +1426,8 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	z-index: 100001;
 	pointer-events: none;
 	padding: 6px 12px;
-	background: #4f8cff;
-	color: #fff;
+	background: var(--fw-accent, #3858e9);
+	color:var(--fw-accent-fg, #fff);
 	font-size: 12px;
 	font-weight: 600;
 	border-radius: 6px;
@@ -1518,7 +1535,7 @@ body.fw-live-editor-shell .media-modal-backdrop {
 .fw-le-tree__row:hover .fw-le-tree__act--dup,
 .fw-le-tree__row:hover .fw-le-tree__act--del,
 .fw-le-tree__row:hover .fw-le-tree__grip { opacity: 1; }
-.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__act--vis { color: #4f8cff; }
+.fw-le-tree__node.is-hidden > .fw-le-tree__row .fw-le-tree__act--vis { color: var(--fw-accent, #3858e9); }
 
 /* ---- Structure: filter box ---- */
 .fw-le-nav__search {
@@ -1546,17 +1563,17 @@ body.fw-live-editor-shell .media-modal-backdrop {
 	font-size: 12.5px;
 	outline: none;
 }
-.fw-le-nav__search input:focus { border-color: #4f8cff; }
+.fw-le-nav__search input:focus { border-color: var(--fw-accent, #3858e9); }
 .fw-le-nav__search input::placeholder { color: #6b7080; }
 
 /* ---- Structure: canvas↔tree hover sync ---- */
 .fw-le-tree__row.is-hover { background: #2b2d37; box-shadow: inset 0 0 0 1px #3f4250; }
 
 /* Add-element "+" quick-action gets the accent on hover. */
-.fw-le-tree__act--add:hover { color: #8fb0ff; background: rgba( 79, 140, 255, .16 ); }
+.fw-le-tree__act--add:hover { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); background: rgba( 79, 140, 255, .16 ); }
 
 /* Add panel while aimed at a specific container (from the tree "+"). */
-#fw-le-panel.is-targeting .fw-le-panel__head { color: #8fb0ff; }
+#fw-le-panel.is-targeting .fw-le-panel__head { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); }
 
 /* ---- Structure: multi-select ---- */
 .fw-le-tree__row.is-multi { background: rgba( 79, 140, 255, .13 ); }
@@ -1595,4 +1612,4 @@ body.fw-live-editor-shell .media-modal-backdrop {
 }
 /* Its add-column button stays visible (it's the only affordance on the row). */
 .fw-le-tree__node--default > .fw-le-tree__row .fw-le-tree__tail { opacity: 1; }
-.fw-le-tree__act--addcol:hover { color: #8fb0ff; background: rgba( 79, 140, 255, .16 ); }
+.fw-le-tree__act--addcol:hover { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); background: rgba( 79, 140, 255, .16 ); }

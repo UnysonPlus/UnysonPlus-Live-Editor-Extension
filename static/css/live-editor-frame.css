@@ -56,7 +56,7 @@ body.fw-live-editor-frame-active .fw-le-collapsed::after {
 
 /* Inline text editing (double-click a text block). */
 body.fw-live-editor-frame-active .fw-le-editing {
-	outline: 2px solid #4f8cff !important;
+	outline: 2px solid var(--fw-accent, #3858e9) !important;
 	outline-offset: 1px;
 	cursor: text;
 	box-shadow: 0 0 0 4px rgba( 79, 140, 255, .14 );
@@ -109,7 +109,7 @@ body.fw-live-editor-frame-active .fw-le-empty-col::after {
 	justify-content: center;
 	font-size: 12px;
 	font-style: italic;
-	color: #7e93c4;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 45%, #fff);
 	pointer-events: none;
 }
 
@@ -130,9 +130,9 @@ body.fw-live-editor-frame-active .fw-le-add-section-btn {
 	gap: 10px;
 	padding: 12px 22px;
 	background: rgba( 79, 140, 255, .06 );
-	border: 1px dashed #9bb6f5;
+	border: 1px dashed color-mix(in srgb, var(--fw-accent, #3858e9) 55%, #fff);
 	border-radius: 8px;
-	color: #3d6fd0;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 78%, #000);
 	font-size: 13px;
 	font-weight: 600;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -142,8 +142,8 @@ body.fw-live-editor-frame-active .fw-le-add-section-btn {
 
 body.fw-live-editor-frame-active .fw-le-add-section-btn:hover {
 	background: rgba( 79, 140, 255, .12 );
-	border-color: #4f8cff;
-	color: #2756b0;
+	border-color: var(--fw-accent, #3858e9);
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #000);
 }
 
 body.fw-live-editor-frame-active .fw-le-add-section-zone--empty .fw-le-add-section-btn {
@@ -158,7 +158,7 @@ body.fw-live-editor-frame-active .fw-le-addcol-plus {
 	position: relative;
 	display: inline-block;
 	border-radius: 50%;
-	background: #4f8cff;
+	background: var(--fw-accent, #3858e9);
 	font-size: 0;
 	color: transparent;
 	flex: 0 0 auto;
@@ -210,9 +210,9 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn {
 	gap: 8px;
 	padding: 7px 16px;
 	background: #fff;
-	border: 1px dashed #c2cbe0;
+	border: 1px dashed color-mix(in srgb, var(--fw-accent, #3858e9) 22%, #fff);
 	border-radius: 6px;
-	color: #3d6fd0;
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 78%, #000);
 	font-size: 12px;
 	font-weight: 600;
 	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -222,8 +222,8 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn {
 
 body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	background: rgba( 79, 140, 255, .08 );
-	border-color: #4f8cff;
-	color: #2756b0;
+	border-color: var(--fw-accent, #3858e9);
+	color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #000);
 }
 
 /* ---- Overlay root --------------------------------------------------------- */
@@ -245,12 +245,12 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 }
 
 #fw-le-overlay .fw-le-box--hover {
-	border: 1px solid #4f8cff;
+	border: 1px solid var(--fw-accent, #3858e9);
 	background: rgba( 79, 140, 255, .06 );
 }
 
 #fw-le-overlay .fw-le-box--active {
-	border: 2px solid #4f8cff;
+	border: 2px solid var(--fw-accent, #3858e9);
 	background: rgba( 79, 140, 255, .04 );
 }
 
@@ -263,7 +263,7 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	display: inline-flex;
 	align-items: stretch;
 	height: 24px;
-	background: #4f8cff;
+	background: var(--fw-accent, #3858e9);
 	border-radius: 4px 4px 0 0;
 	box-shadow: 0 2px 6px rgba( 0, 0, 0, .2 );
 	pointer-events: auto;
@@ -456,7 +456,7 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	position: fixed;
 	width: 12px;
 	height: 36px;
-	background: #4f8cff;
+	background: var(--fw-accent, #3858e9);
 	border: 2px solid #fff;
 	border-radius: 6px;
 	box-shadow: 0 1px 5px rgba( 0, 0, 0, .35 );
@@ -480,7 +480,7 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 }
 
 #fw-le-overlay .fw-le-resize:hover {
-	background: #3d7bf0;
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 88%, #000);
 }
 
 #fw-le-overlay .fw-le-resize-tip {
@@ -510,7 +510,7 @@ html.fw-le-col-resizing * {
 #fw-le-dropline {
 	position: fixed;
 	z-index: 2147483001;
-	background: #4f8cff;
+	background: var(--fw-accent, #3858e9);
 	border-radius: 2px;
 	pointer-events: none;
 	box-shadow: 0 0 0 1px rgba( 79, 140, 255, .35 ), 0 0 6px rgba( 79, 140, 255, .5 );
@@ -533,7 +533,7 @@ body.fw-live-editor-frame-active .fw-le-drag-clone {
 	overflow: hidden;
 	opacity: .92;
 	border-radius: 4px;
-	outline: 2px solid #4f8cff;
+	outline: 2px solid var(--fw-accent, #3858e9);
 	box-shadow: 0 16px 40px rgba( 0, 0, 0, .35 );
 	background: #fff;
 }
@@ -541,7 +541,7 @@ body.fw-live-editor-frame-active .fw-le-drag-clone {
 body.fw-live-editor-frame-active .fw-le-drag-placeholder {
 	opacity: 1 !important;
 	background: rgba( 79, 140, 255, .07 ) !important;
-	outline: 2px dashed #4f8cff !important;
+	outline: 2px dashed var(--fw-accent, #3858e9) !important;
 	outline-offset: -2px;
 }
 
@@ -551,7 +551,7 @@ body.fw-live-editor-frame-active .fw-le-drag-placeholder > * { visibility: hidde
    inset glow distinguishes "drop INSIDE this column" from the thin vertical
    drop-line used for sibling column inserts. */
 body.fw-live-editor-frame-active .fw-le-nest-target {
-	outline: 2px solid #4f8cff !important;
+	outline: 2px solid var(--fw-accent, #3858e9) !important;
 	outline-offset: -2px;
 	box-shadow: inset 0 0 0 9999px rgba( 79, 140, 255, .08 ) !important;
 }
