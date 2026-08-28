@@ -1966,6 +1966,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		}
 
 		/**
+		 * Filters the maximum stored bytes allowed per post for Live Editor revision history.
+		 *
 		 * Total stored bytes allowed per post for revision history.
 		 *
 		 * @param int $bytes   Default REVISIONS_MAX_BYTES.
