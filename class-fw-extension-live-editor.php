@@ -72,6 +72,12 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// and on the wp-admin post-edit screen, so it is registered unconditionally.
 		add_action( 'admin_bar_menu', array( $this, '_action_admin_bar_menu' ), 90 );
 
+		// The Live Editor renders through the THEME on the front end, so the
+		// wp-admin context the options UI assumes is absent. See
+		// _action_editor_admin_context() for what is restored and why.
+		add_action( 'wp_head', array( $this, '_action_editor_admin_context' ), 99 );
+		add_action( 'wp_footer', array( $this, '_action_editor_postbox_toggles' ), 9999 );
+
 		// Entry points into the live editor from wp-admin: a button in the Publish
 		// box on the post-edit screen, and a hover row-action in the Pages/Posts
 		// list table (like "Edit with Elementor").
@@ -2211,6 +2217,134 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		) ) );
 
 		wp_send_json_success( array( 'time' => $time ) );
+	}
+
+
+	/**
+	 * Is this request the editor shell or its canvas iframe?
+	 */
+	private function is_editor_request() {
+		return null !== FW_Request::GET( $this->boot_query_var )
+			|| null !== FW_Request::GET( $this->frame_query_var );
+	}
+
+	/**
+	 * Restore the wp-admin context the options UI is authored against.
+	 *
+	 * The stylesheets themselves now load correctly here (the framework registers
+	 * `fw-backend-options-skin` and enqueue_options_runtime() pulls the whole chain
+	 * onto this front-end document). What does NOT come with them is the
+	 * ENVIRONMENT those sheets assume:
+	 *
+	 *  1. `--fw-accent` chains to `--wp-admin-theme-color`, which on the front end is
+	 *     defined by WordPress's own block-library stylesheet as #007cba -- the
+	 *     pre-2021 admin blue. Measured here: rgb(0, 124, 186). So every accent in
+	 *     the option UI rendered legacy blue no matter which admin colour scheme the
+	 *     user picked. The scheme's accent is colors[count-2] in
+	 *     $_wp_admin_css_colors ('fresh' -> #2271b1, 'modern' -> #3858e9, 'midnight'
+	 *     -> #69a8bb), which holds across every core scheme unlike a fixed index.
+	 *
+	 *  2. Primary buttons put a label ON that accent, so the label colour must be
+	 *     CHOSEN from it rather than assumed white. Measured white-on-accent across
+	 *     the nine core schemes: fresh 5.17, modern 5.61, blue 6.63, sunrise 4.58 and
+	 *     ectoplasm 5.59 pass -- but light 2.92, midnight 2.65, coffee 2.29 and ocean
+	 *     2.10 fail. Four of nine would leave Save barely readable.
+	 *
+	 *  3. The option UI is authored against wp-admin typography (13px / 1.4, system
+	 *     stack). Inside the theme's document it inherits the theme's body type
+	 *     instead -- measured 18.4px / 29.44px -- and every unstyled part inflates
+	 *     from that. Scoped to the option containers, never to <body>: the page being
+	 *     edited must keep its own type, since that is what the user is looking at.
+	 */
+	public function _action_editor_admin_context() {
+		if ( ! $this->is_editor_request() ) {
+			return;
+		}
+
+		$accent = '#3858e9';
+		if ( ! function_exists( 'register_admin_color_schemes' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/admin.php';
+		}
+		register_admin_color_schemes();
+		$scheme = get_user_option( 'admin_color' );
+		if ( $scheme && ! empty( $GLOBALS['_wp_admin_css_colors'][ $scheme ]->colors ) ) {
+			$colors = $GLOBALS['_wp_admin_css_colors'][ $scheme ]->colors;
+			if ( count( $colors ) >= 2 ) {
+				$accent = $colors[ count( $colors ) - 2 ];
+			}
+		}
+
+		// Relative luminance -> contrast against white vs against the ink; pick
+		// whichever actually wins for this accent.
+		$rgb = array_map( 'hexdec', str_split( ltrim( $accent, '#' ), 2 ) );
+		$lin = array_map(
+			function ( $v ) {
+				$v = $v / 255;
+				return $v <= 0.03928 ? $v / 12.92 : pow( ( $v + 0.055 ) / 1.055, 2.4 );
+			},
+			$rgb
+		);
+		$l  = 0.2126 * $lin[0] + 0.7152 * $lin[1] + 0.0722 * $lin[2];
+		$fg = ( ( 1.05 / ( $l + 0.05 ) ) >= ( ( $l + 0.05 ) / 0.1197 ) ) ? '#ffffff' : '#1f2430';
+
+		$admin_type = '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif';
+
+		printf(
+			'<style id="fw-le-admin-context">'
+			. ':root,body{--wp-admin-theme-color:%1$s;--fw-accent-fg:%2$s;}'
+			. '.fw-modal,.fw-options-modal,.fw-mp-pop-panel,.fw-backend-option,'
+			. '.fw-backend-options-group,.fw-backend-options-tabs,.fw-options-tabs-wrapper{'
+			. 'font-family:%3$s;font-size:13px;line-height:1.4;}'
+			. '.fw-modal p,.fw-options-modal p,.fw-backend-option p,'
+			. '.fw-backend-option-desc{font-family:inherit;line-height:1.4;}'
+			. '.fw-backend-option label{font-family:inherit;}'
+			. '.fw-backend-option .thumbnails img,.fw-backend-option .image_picker_selector img,'
+			. '.fw-backend-option .fw-option-type-image-picker img{max-width:none;}'
+			. '.media-toolbar,.media-toolbar-primary,.media-toolbar-secondary{box-sizing:content-box;}'
+			. '.fw-backend-option .fw-backend-option-input select:not([multiple]):not([size]),'
+			. '.fw-backend-option .fw-backend-option-input input[type="text"],'
+			. '.fw-backend-option .fw-backend-option-input input[type="number"],'
+			. '.fw-backend-option .fw-backend-option-input input[type="password"]{'
+			. 'line-height:calc(var(--u-control-h,34px) - 2px) !important;}'
+			. '</style>',
+			esc_attr( $accent ),
+			esc_attr( $fg ),
+			$admin_type
+		);
+	}
+
+	/**
+	 * Re-arm WordPress's postbox collapse inside the editor.
+	 *
+	 * An addable-box renders each row as a WordPress POSTBOX, and its collapse is
+	 * core's postbox.js -- clicking h2.hndle toggles the `closed` class. But
+	 * add_postbox_toggles() binds DIRECTLY to the handles present when it runs
+	 * ( $handles.on('click.postboxes', ...) ); it does not delegate. wp-admin calls
+	 * it on page load, the Live Editor never calls it at all, and the modal's boxes
+	 * are created later by AJAX anyway -- which is why a box rendered but would not
+	 * collapse.
+	 *
+	 * UNBIND FIRST: core never calls .off(), so re-running it stacks handlers on the
+	 * same handle. Binding across several render events left an EVEN number of
+	 * handlers, so each click toggled twice and the box looked frozen. Clearing the
+	 * namespace first makes the re-bind idempotent.
+	 */
+	public function _action_editor_postbox_toggles() {
+		if ( ! $this->is_editor_request() ) {
+			return;
+		}
+		echo '<script>(function(){'
+			. 'function bind(){ try {'
+			. 'if (window.jQuery) { jQuery(".postbox .hndle, .postbox .handlediv, .postbox .postbox-header,'
+			. ' .fw-postbox .hndle, .fw-postbox .handlediv").off("click.postboxes"); }'
+			. 'if (window.postboxes && typeof postboxes.add_postbox_toggles === "function") {'
+			. 'postboxes.add_postbox_toggles(window.pagenow || ""); } } catch (e) {} }'
+			. 'if (window.fwEvents && fwEvents.on) {'
+			. 'fwEvents.on("fw:options:init", bind);'
+			. 'fwEvents.on("fw:options-modal:open", bind);'
+			. 'fwEvents.on("fw:options:init:tabs", bind); }'
+			. 'if (window.jQuery) { jQuery(document).ready(bind); }'
+			. '})();</script>';
 	}
 
 }
