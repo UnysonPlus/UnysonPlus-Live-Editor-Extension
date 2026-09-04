@@ -1415,9 +1415,54 @@ body.fw-live-editor-shell .media-modal-backdrop {
 
 .fw-le-coltile:hover .fw-le-coltile__lbl { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #000); }
 
+/* Insert Grid picker — a wider, tabbed modal (parity with the backend Grid tile). Head + tabs are
+   fixed; the panel body scrolls. The negative side margins let the tab underline and the body span
+   edge-to-edge inside the picker's 22px padding. */
+.fw-le-picker--grid {
+	width: min( 780px, calc( 100vw - 40px ) );
+	max-height: calc( 100vh - 80px );
+	display: flex;
+	flex-direction: column;
+	padding-bottom: 0;
+}
+.fw-le-picker--grid .fw-le-picker__head { flex: none; margin-bottom: 10px; }
+.fw-le-gtabs {
+	display: flex;
+	gap: 2px;
+	flex: none;
+	overflow-x: auto;
+	margin: 0 -22px;
+	padding: 0 18px;
+	border-bottom: 1px solid color-mix( in srgb, var(--fw-accent, #3858e9) 14%, #e6e9f2 );
+}
+.fw-le-gtab {
+	-webkit-appearance: none;
+	appearance: none;
+	background: transparent;
+	border: 0;
+	border-bottom: 2px solid transparent;
+	color: #5a6270;
+	cursor: pointer;
+	font-size: 13px;
+	font-weight: 600;
+	padding: 10px 12px;
+	white-space: nowrap;
+}
+.fw-le-gtab:hover { color: var(--fw-accent, #3858e9); }
+.fw-le-gtab.is-active { color: var(--fw-accent, #3858e9); border-bottom-color: var(--fw-accent, #3858e9); }
+.fw-le-gbody {
+	flex: 1 1 auto;
+	overflow-y: auto;
+	margin: 0 -22px;
+	padding: 16px 22px 22px;
+}
+.fw-le-gpanel { display: none; }
+.fw-le-gpanel.is-active { display: block; }
+
 @media ( max-width: 600px ) {
 	.fw-le-picker__grid { grid-template-columns: repeat( 3, 1fr ); }
 	.fw-le-picker__grid--col { grid-template-columns: repeat( 3, 1fr ); }
+	.fw-le-picker__grid--div { grid-template-columns: repeat( 2, 1fr ); } /* 4 structure tiles → 2×2 on narrow screens */
 }
 
 /* Floating ghost that follows the cursor while dragging a panel element. */
@@ -1613,3 +1658,26 @@ body.fw-live-editor-shell .media-modal-backdrop {
 /* Its add-column button stays visible (it's the only affordance on the row). */
 .fw-le-tree__node--default > .fw-le-tree__row .fw-le-tree__tail { opacity: 1; }
 .fw-le-tree__act--addcol:hover { color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #fff); background: rgba( 79, 140, 255, .16 ); }
+
+/* Modern layout picker — Section / Flexbox / Grid Div tiles (icon + label). */
+.fw-le-picker__grid--div {
+	display: grid;
+	grid-template-columns: repeat(4, 1fr); /* Section · Block · Flexbox · Grid — one row, matching the backend palette */
+	gap: 12px;
+}
+.fw-le-picker__tile--div {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 18px 10px;
+	height: auto;
+}
+.fw-le-picker__ticon svg { display: block; }
+.fw-le-picker__tlabel {
+	font-size: 12px;
+	font-weight: 600;
+	color: #3c4257;
+}
+.fw-le-picker__tile--div:hover .fw-le-picker__tlabel { color: var(--fw-accent, #3858e9); }

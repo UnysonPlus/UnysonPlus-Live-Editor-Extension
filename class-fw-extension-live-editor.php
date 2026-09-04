@@ -92,6 +92,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_new_section', array( $this, '_ajax_new_section' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_column', array( $this, '_ajax_new_column' ) );
 		add_action( 'wp_ajax_fw_live_editor_new_container', array( $this, '_ajax_new_container' ) );
+		add_action( 'wp_ajax_fw_live_editor_new_flexbox', array( $this, '_ajax_new_flexbox' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
 		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
@@ -804,6 +805,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'newSection'  => 'fw_live_editor_new_section',
 				'newColumn'   => 'fw_live_editor_new_column',
 				'newContainer' => 'fw_live_editor_new_container',
+				'newFlexbox'  => 'fw_live_editor_new_flexbox',
 				'renderPage'  => 'fw_live_editor_render_page',
 				'save'        => 'fw_live_editor_save',
 				'autosave'    => 'fw_live_editor_autosave',
@@ -816,6 +818,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// Section types available for the structure picker (only those whose
 			// shortcode is actually registered).
 			'sectionTypes' => $this->get_section_types(),
+			// Modern layout primitives (Section / Flexbox / Grid) — parity with the backend
+			// builder's flexbox get_thumbnails_data. Each drops a Div (flexbox) preset.
+			'flexboxTiles' => $this->get_flexbox_tiles(),
 			// Server-side diagnostic: did WordPress actually enqueue the options
 			// runtime on this shell? If these are false, the core
 			// `fw:backend:enqueue-options-on-frontend` filter isn't taking effect
@@ -1127,6 +1132,30 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				'addColumn'      => __( 'Add Column', 'fw' ),
 			),
 		) );
+
+		// Force every shortcode's BASE static (CSS/JS) into the editor frame so ANY
+		// element dropped from the Add panel renders styled — not only the shortcodes
+		// already present on the page. On the frontend a shortcode's static enqueues
+		// only when it is used; the editor needs them all up-front.
+		$sc_ext = fw_ext( 'shortcodes' );
+		if ( $sc_ext && method_exists( $sc_ext, 'get_shortcodes' ) ) {
+			foreach ( (array) $sc_ext->get_shortcodes() as $__tag => $__sc ) {
+				if ( is_object( $__sc ) && method_exists( $__sc, '_enqueue_static' ) ) {
+					$__sc->_enqueue_static();
+				}
+				// Load ALL design skins too, so switching a shortcode's Design and clicking
+				// Apply/Save renders it immediately (skins normally enqueue per-instance).
+				if ( function_exists( 'fw_sc_designs' ) ) {
+					foreach ( array_keys( (array) fw_sc_designs( $__tag ) ) as $__dk ) {
+						if ( function_exists( 'fw_sc_design_enqueue' ) ) { fw_sc_design_enqueue( $__tag, $__dk ); }
+						$__drel = '/shortcodes/' . $__tag . '/static/css/design/' . $__dk . '.css';
+						if ( method_exists( $sc_ext, 'get_declared_path' ) && file_exists( $sc_ext->get_declared_path( $__drel ) ) ) {
+							wp_enqueue_style( 'fw-sc-' . $__tag . '-design-' . $__dk, $sc_ext->get_declared_URI( $__drel ), array(), $this->manifest->get_version() );
+						}
+					}
+				}
+			}
+		}
 	}
 
 	/* ---------------------------------------------------------------------
@@ -1287,9 +1316,43 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		$html = $this->render_item_html( $item, $post_id, ! $this->is_section_type( $item['type'] ) );
 
 		wp_send_json_success( array(
-			'id'   => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
-			'html' => $html,
+			'id'     => isset( $item['atts']['unique_id'] ) ? $item['atts']['unique_id'] : '',
+			'html'   => $html,
+			'styles' => $this->item_style_urls( $item ),
 		) );
+	}
+
+	/**
+	 * Design-skin stylesheet URLs an item (and its descendants) needs, so the frame
+	 * can inject them on a re-render — otherwise switching a shortcode's Design and
+	 * clicking Apply shows the new skin unstyled until the whole frame reloads. A leaf
+	 * whose resolved design has no CSS file (the base-covered default) contributes none.
+	 */
+	private function item_style_urls( $item, array &$urls = array() ) {
+		if ( ! is_array( $item ) ) { return $urls; }
+		$tag  = isset( $item['shortcode'] ) ? $item['shortcode'] : ( isset( $item['type'] ) ? $item['type'] : '' );
+		$atts = ( isset( $item['atts'] ) && is_array( $item['atts'] ) ) ? $item['atts'] : array();
+		if ( $tag && function_exists( 'fw_sc_designs' ) && function_exists( 'fw_sc_design_resolve' ) ) {
+			$designs = fw_sc_designs( $tag );
+			if ( ! empty( $designs ) ) {
+				$key = fw_sc_design_resolve( $tag, $atts, 'default' );
+				$css = ! empty( $designs[ $key ]['css_uri'] ) ? $designs[ $key ]['css_uri'] : '';
+				if ( $css === '' ) {
+					// Built-in skins carry no css_uri in the registry — they load by the
+					// <shortcode>/static/css/design/<key>.css convention.
+					$__ext = fw_ext( 'shortcodes' );
+					$__rel = '/shortcodes/' . $tag . '/static/css/design/' . $key . '.css';
+					if ( $__ext && method_exists( $__ext, 'get_declared_path' ) && file_exists( $__ext->get_declared_path( $__rel ) ) ) {
+						$css = $__ext->get_declared_URI( $__rel );
+					}
+				}
+				if ( $css !== '' ) { $urls[] = $css; }
+			}
+		}
+		if ( ! empty( $item['_items'] ) && is_array( $item['_items'] ) ) {
+			foreach ( $item['_items'] as $__child ) { $this->item_style_urls( $__child, $urls ); }
+		}
+		return array_values( array_unique( $urls ) );
 	}
 
 	/** The section types offered in the structure picker — filtered to those whose
@@ -1310,6 +1373,120 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			}
 		}
 		return $out;
+	}
+
+	/**
+	 * The modern layout primitives for the structure picker — parity with the backend page-builder
+	 * flexbox tiles (Section / Flexbox / Grid). Each drops a Div (flexbox) preset: html_tag + display,
+	 * mirroring the backend tile's data-fxtag / data-fxdisplay. Empty if flexbox isn't registered.
+	 */
+	private function get_flexbox_tiles() {
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+		if ( ! $sc || ! $sc->get_shortcode( 'flexbox' ) ) {
+			return array();
+		}
+		return array(
+			array( 'id' => 'section', 'title' => __( 'Section', 'fw' ), 'html_tag' => 'section', 'display' => 'block', 'desc' => __( 'A full-width content band — where you start a page.', 'fw' ) ),
+			array( 'id' => 'block',   'title' => __( 'Block', 'fw' ),   'html_tag' => 'div',     'display' => 'block', 'desc' => __( 'A plain container that stacks its children — the simplest wrapper.', 'fw' ) ),
+			array( 'id' => 'flexbox', 'title' => __( 'Flexbox', 'fw' ), 'html_tag' => 'div',     'display' => 'flex',  'desc' => __( 'A row or a stack of items (CSS flexbox).', 'fw' ) ),
+			array( 'id' => 'grid',    'title' => __( 'Grid', 'fw' ),    'html_tag' => 'div',     'display' => 'grid',  'desc' => __( 'Columns — a CSS grid.', 'fw' ) ),
+		);
+	}
+
+	/**
+	 * Build a fresh Div (flexbox) node for the canvas — the modern default container. `html_tag` and
+	 * `display` come from the tile (Section = section/block, Flexbox = div/flex, Grid = div/grid),
+	 * mirroring the backend tile's data-fxtag / data-fxdisplay preset. Rendered with correction ON so
+	 * it round-trips exactly like the page.
+	 *
+	 * @internal
+	 */
+	public function _ajax_new_flexbox() {
+		$post_id = $this->verify_ajax();
+		$this->load_shortcodes();
+		$sc = fw_ext( 'shortcodes' );
+		if ( ! $sc || ! $sc->get_shortcode( 'flexbox' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Flexbox unavailable.', 'fw' ) ) );
+		}
+
+		$atts = $this->default_atts( $sc, 'flexbox' );
+
+		$tag = (string) FW_Request::POST( 'html_tag', 'div' );
+		if ( ! in_array( $tag, array( 'div', 'section', 'header', 'main', 'article', 'aside', 'footer', 'nav' ), true ) ) {
+			$tag = 'div';
+		}
+		$display = (string) FW_Request::POST( 'display', 'flex' );
+		if ( ! in_array( $display, array( 'flex', 'grid', 'block' ), true ) ) {
+			$display = 'flex';
+		}
+		$atts['html_tag']  = $tag;
+		$atts['unique_id'] = fw_rand_md5();
+		// A brand-new Section defaults to a FULL-WIDTH BAND (background edge-to-edge, content
+		// contained to the site width) — the convention for a page band (Divi / Bricks / Elementor
+		// Sections), and what users expect from something called "Section". Only freshly-created
+		// sections carry this explicit flag; the option default stays 'no', so every EXISTING flexbox
+		// section keeps rendering exactly as before (contained band). The Div structures (Block /
+		// Flexbox / Grid) stay boxed, matching Elementor's Container default.
+		if ( $tag === 'section' ) { $atts['full_width'] = 'yes'; }
+
+		// Optional grid layout (Insert Grid parity in the live editor): build child cells from a list
+		// of column widths, mirroring the backend buildGridDiv. Equal -> N-track grid with bare cells;
+		// uneven twelfths -> 12-track grid + fw-span cells; uneven fifths -> flex row + fifth-preset
+		// cells (the flexbox view turns those into fw-fifth-N classes).
+		$children = array();
+		$cols_raw = (string) FW_Request::POST( 'cols', '' );
+		$cols     = ( $cols_raw !== '' ) ? json_decode( $cols_raw, true ) : null;
+		if ( is_array( $cols ) && count( $cols ) ) {
+			$fr_map    = array( '1_1'=>12,'11_12'=>11,'5_6'=>10,'3_4'=>9,'2_3'=>8,'7_12'=>7,'1_2'=>6,'5_12'=>5,'1_3'=>4,'1_4'=>3,'1_6'=>2,'1_12'=>1,'1_5'=>2.4,'2_5'=>4.8,'3_5'=>7.2,'4_5'=>9.6 );
+			$all_equal = ( count( array_unique( $cols ) ) === 1 );
+			$has_fifth = false;
+			foreach ( $cols as $__w ) { if ( preg_match( '/_5$/', (string) $__w ) ) { $has_fifth = true; break; } }
+			$cell = function ( $width ) use ( $sc ) {
+				$ca = $this->default_atts( $sc, 'flexbox' );
+				$ca['html_tag']  = 'div';
+				$ca['unique_id'] = fw_rand_md5();
+				if ( $width !== null ) { $ca['width'] = $width; }
+				return array( 'type' => 'flexbox', 'atts' => $ca, '_items' => array() );
+			};
+			if ( $all_equal ) {
+				$display              = 'grid';
+				$atts['grid_columns'] = (string) count( $cols );
+				foreach ( $cols as $__w ) { $children[] = $cell( null ); }
+			} elseif ( $has_fifth ) {
+				$display = 'flex';
+				foreach ( $cols as $__w ) {
+					$children[] = $cell( array( 'base' => array( 'preset' => (string) $__w ), 'md' => array( 'preset' => 'none' ), 'lg' => array( 'preset' => 'none' ) ) );
+				}
+			} else {
+				$display              = 'grid';
+				$atts['grid_columns'] = '12';
+				foreach ( $cols as $__w ) {
+					$fr   = isset( $fr_map[ $__w ] ) ? $fr_map[ $__w ] : 12;
+					$span = (int) round( $fr );
+					if ( abs( $fr - $span ) < 0.01 && $span >= 1 && $span <= 12 ) {
+						$wa = array( 'base' => array( 'preset' => (string) $span ), 'md' => array( 'preset' => 'none' ), 'lg' => array( 'preset' => 'none' ) );
+					} else {
+						$wa = array( 'base' => array( 'preset' => 'custom', 'custom' => array( 'width_custom' => array( 'value' => (string) round( $fr / 12 * 100, 2 ), 'unit' => '%' ) ) ), 'md' => array( 'preset' => 'none' ), 'lg' => array( 'preset' => 'none' ) );
+					}
+					$children[] = $cell( $wa );
+				}
+			}
+		}
+		$atts['display'] = $display;
+
+		$item = array(
+			'type'   => 'flexbox',
+			'atts'   => $atts,
+			'_items' => $children,
+		);
+
+		wp_send_json_success( array(
+			'item' => $item,
+			// Correction ON so it round-trips exactly like the page (a section-tag Div contains
+			// its content to the theme container, etc.).
+			'html' => $this->render_item_html( $item, $post_id, false ),
+		) );
 	}
 
 	/**
@@ -2306,6 +2483,25 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			. '.fw-backend-option .fw-backend-option-input input[type="number"],'
 			. '.fw-backend-option .fw-backend-option-input input[type="password"]{'
 			. 'line-height:calc(var(--u-control-h,34px) - 2px) !important;}'
+			// ...but NOT the two halves of a unit-input. That rule above exists to
+			// centre a standalone control on its 34px box; the segmented row is 34px
+			// INCLUDING its 1px border, so a 34px child overflows it by 1px top and
+			// bottom and the value sits high. Same exception the skin makes -- it has
+			// to be repeated here because this block is `!important` and prints last.
+			. '.fw-backend-option .fw-backend-option-input .fw-unit-input-row input,'
+			. '.fw-backend-option .fw-backend-option-input .fw-unit-input-row select:not([multiple]):not([size]){'
+			. 'height:auto !important;min-height:0 !important;align-self:stretch;'
+			. 'padding-top:0 !important;padding-bottom:0 !important;line-height:normal !important;}'
+			// Joined value+unit LAYOUT. The unit-input's own styles.css sizes the two halves
+			// (value flex:1 max 72px, unit auto) with `.fw-option-type-unit-input select.fw-unit-input-unit`
+			// -- specificity (0,2,1), a TIE with the framework's `.fw-backend-option-input select{width:100%}`.
+			// In wp-admin the option-type sheet loads last and wins; on this front-end document the load
+			// order differs, so `width:100%` wins instead -- the unit <select> fills the row and the value
+			// field collapses to 0. Re-assert the backend layout here (this block prints last, !important),
+			// scoped to the segmented row so nothing else is touched, so the live editor matches wp-admin.
+			. '.fw-backend-option .fw-backend-option-input .fw-unit-input-row{display:flex !important;gap:0;align-items:stretch;}'
+			. '.fw-backend-option .fw-backend-option-input .fw-unit-input-row input.fw-unit-input-value{flex:1 1 auto !important;width:auto !important;min-width:0 !important;max-width:72px !important;margin:0 !important;border-right:0 !important;border-top-right-radius:0 !important;border-bottom-right-radius:0 !important;}'
+			. '.fw-backend-option .fw-backend-option-input .fw-unit-input-row select.fw-unit-input-unit{flex:0 0 auto !important;width:auto !important;min-width:64px !important;max-width:max-content !important;margin:0 !important;border-top-left-radius:0 !important;border-bottom-left-radius:0 !important;}'
 			. '</style>',
 			esc_attr( $accent ),
 			esc_attr( $fg ),

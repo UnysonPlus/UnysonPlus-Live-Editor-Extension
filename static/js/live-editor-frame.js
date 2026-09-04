@@ -139,13 +139,21 @@
 		var t = item.type;
 		if ( t === 'column' ) { return 'Column'; }
 		if ( t === 'row' ) { return 'Row'; }
+		// A flexbox reports its KIND, not the generic "Flexbox" — matching the palette tiles
+		// (Section / Block / Flexbox / Grid) and the backend title. Mirrors the shell's labelFor().
+		if ( t === 'flexbox' ) {
+			var htag = ( item.atts && item.atts.html_tag ) || 'div';
+			if ( htag === 'section' ) { return 'Section'; }
+			var disp = ( item.atts && item.atts.display ) || 'flex';
+			return disp === 'grid' ? 'Grid' : ( disp === 'block' ? 'Block' : 'Flexbox' );
+		}
 		if ( t === 'section' || /section$/.test( t ) ) { return 'Section'; }
 		var sc = item.shortcode || t;
 		return LEAF_LABELS[ sc ] || titleize( sc );
 	}
 
 	function isContainerType( t ) {
-		return t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
+		return t === 'flexbox' || t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
 	}
 
 	// Preview device → the responsive_hide ("Hide on") key that hides at that
@@ -1382,10 +1390,11 @@
 			for ( var i = 0; i < cols.length; i++ ) {
 				var el = cols[ i ];
 				var meta = this.index[ el.getAttribute( 'data-fw-item-id' ) ];
-				if ( ! meta || meta.type !== 'column' ) { continue; }
-				// A column holding nested columns is NOT empty even with no leaves.
+				if ( ! meta || ( meta.type !== 'column' && meta.type !== 'flexbox' ) ) { continue; }
+				// A column / flexbox holding nested containers is NOT empty even with no leaves.
 				var hasContent = this.leafChildrenOf( el, null ).length > 0 ||
-					this.childColumnsOf( el ).length > 0;
+					this.childColumnsOf( el ).length > 0 ||
+					( el.querySelector && !! el.querySelector( '.fw-flexbox[data-fw-item-id]' ) );
 				if ( ! hasContent ) { el.classList.add( 'fw-le-empty-col' ); }
 				else { el.classList.remove( 'fw-le-empty-col' ); }
 			}
@@ -1406,7 +1415,7 @@
 			while ( node && node !== document.body ) {
 				if ( node.nodeType === 1 && node.hasAttribute && node.hasAttribute( 'data-fw-item-id' ) ) {
 					var meta = this.index[ node.getAttribute( 'data-fw-item-id' ) ];
-					if ( meta && meta.type === 'column' ) { return node; }
+					if ( meta && ( meta.type === 'column' || meta.type === 'flexbox' ) ) { return node; }
 				}
 				node = node.parentNode;
 			}
@@ -1584,6 +1593,21 @@
 		/** Swap a re-rendered item's HTML into the canvas, keeping it selected. */
 		replaceItem: function ( payload ) {
 			if ( ! payload || ! payload.id ) { return; }
+			// Inject any design-skin stylesheets the re-rendered item needs, so a Design
+			// change applies immediately (no full frame reload). Deduped by absolute href.
+			if ( payload.styles && payload.styles.length ) {
+				var _have = {}, _links = document.getElementsByTagName( 'link' ), _k;
+				for ( _k = 0; _k < _links.length; _k++ ) { if ( _links[ _k ].href ) { _have[ _links[ _k ].href ] = 1; } }
+				for ( _k = 0; _k < payload.styles.length; _k++ ) {
+					var _href = payload.styles[ _k ];
+					if ( _href && ! _have[ _href ] ) {
+						var _lnk = document.createElement( 'link' );
+						_lnk.rel = 'stylesheet'; _lnk.href = _href;
+						( document.head || document.documentElement ).appendChild( _lnk );
+						_have[ _href ] = 1;
+					}
+				}
+			}
 			var old = document.querySelector( '[data-fw-item-id="' + payload.id + '"]' );
 			if ( ! old ) { this.log( 'replace: element not found', payload.id ); return; }
 

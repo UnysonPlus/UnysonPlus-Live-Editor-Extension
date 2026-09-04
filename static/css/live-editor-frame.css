@@ -121,7 +121,14 @@ body.fw-live-editor-frame-active .fw-le-add-section-zone {
 }
 
 body.fw-live-editor-frame-active .fw-le-add-section-zone--empty {
-	padding: 60px 16px;
+	/* A brand-new page has no content, so the theme's content area collapses and this prompt would
+	   sit flush under a sticky header (clipped). Give it real height and centre the button so it
+	   always reads as an intentional empty-state, clear of the header/footer, on any theme. */
+	min-height: 55vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 48px 16px;
 }
 
 body.fw-live-editor-frame-active .fw-le-add-section-btn {

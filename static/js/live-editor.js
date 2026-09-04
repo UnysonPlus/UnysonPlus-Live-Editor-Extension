@@ -65,6 +65,12 @@
 		var t = node.type;
 		if ( t === 'column' ) { return 'Column'; }
 		if ( t === 'row' ) { return 'Row'; }
+		if ( t === 'flexbox' ) {
+			var htag = ( node.atts && node.atts.html_tag ) || 'div';
+			if ( htag === 'section' ) { return 'Section'; }
+			var disp = ( node.atts && node.atts.display ) || 'flex';
+			return disp === 'grid' ? 'Grid' : ( disp === 'block' ? 'Block' : 'Flexbox' );
+		}
 		if ( t === 'section' || /section$/.test( t ) ) { return 'Section'; }
 		var sc = node.shortcode || t;
 		return LEAF_LABELS[ sc ] || titleize( sc );
@@ -76,7 +82,7 @@
 
 	function isContainer( node ) {
 		var t = node.type;
-		return t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
+		return t === 'flexbox' || t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
 	}
 
 	// Preview device → the responsive_hide choice key ("Hide on") that hides at
@@ -118,6 +124,7 @@
 	// Structural level of an item for copy/paste targeting.
 	function kindOf( node ) {
 		if ( ! node ) { return 'element'; }
+		if ( node.type === 'flexbox' ) { return ( node.atts && node.atts.html_tag === 'section' ) ? 'section' : 'column'; }
 		if ( node.type === 'column' ) { return 'column'; }
 		if ( /section$/.test( node.type || '' ) ) { return 'section'; }
 		return 'element';
@@ -140,6 +147,41 @@
 	/** Reduced fraction label for a fraction id ("1_2" → "1/2"). */
 	function fracOf( id ) { return String( id || '' ).replace( '_', '/' ); }
 
+	/* ---- Insert Grid layouts (parity with the backend Grid-tile picker) ------- */
+	var GRID_FR = { '1_1':12,'11_12':11,'5_6':10,'3_4':9,'2_3':8,'7_12':7,'1_2':6,'5_12':5,'1_3':4,'1_4':3,'1_6':2,'1_12':1,'1_5':2.4,'2_5':4.8,'3_5':7.2,'4_5':9.6,'1_7':1.714,'1_8':1.5,'1_9':1.333,'1_10':1.2,'1_11':1.091 };
+	function gridFrOf( w ) { return GRID_FR[ w ] || 12; }
+	function gridRep( w, n ) { var a = []; for ( var i = 0; i < n; i++ ) { a.push( w ); } return a; }
+	function gridLabel( L ) {
+		var eq = L.every( function ( w ) { return w === L[ 0 ]; } );
+		if ( eq && L.length >= 4 ) { return fracOf( L[ 0 ] ) + ' × ' + L.length; }
+		return L.map( fracOf ).join( ' + ' );
+	}
+	var GRID_GROUPS_LE = [
+		{ name: 'Equal', layouts: [
+			[ '1_2', '1_2' ], gridRep( '1_3', 3 ), gridRep( '1_4', 4 ), gridRep( '1_5', 5 ), gridRep( '1_6', 6 ),
+			gridRep( '1_7', 7 ), gridRep( '1_8', 8 ), gridRep( '1_9', 9 ), gridRep( '1_10', 10 ), gridRep( '1_11', 11 ), gridRep( '1_12', 12 )
+		] },
+		{ name: 'Two', layouts: [
+			[ '1_3', '2_3' ], [ '2_3', '1_3' ], [ '1_4', '3_4' ], [ '3_4', '1_4' ], [ '1_6', '5_6' ], [ '5_6', '1_6' ],
+			[ '1_12', '11_12' ], [ '11_12', '1_12' ], [ '5_12', '7_12' ], [ '7_12', '5_12' ],
+			[ '2_5', '3_5' ], [ '3_5', '2_5' ], [ '1_5', '4_5' ], [ '4_5', '1_5' ]
+		] },
+		{ name: 'Three', layouts: [
+			[ '1_4', '1_2', '1_4' ], [ '1_6', '2_3', '1_6' ], [ '1_12', '5_6', '1_12' ], [ '5_12', '1_6', '5_12' ],
+			[ '1_2', '1_4', '1_4' ], [ '1_4', '1_4', '1_2' ], [ '2_3', '1_6', '1_6' ], [ '1_6', '1_6', '2_3' ],
+			[ '1_2', '1_3', '1_6' ], [ '1_6', '1_3', '1_2' ],
+			[ '1_5', '3_5', '1_5' ], [ '2_5', '1_5', '2_5' ], [ '3_5', '1_5', '1_5' ], [ '1_5', '1_5', '3_5' ]
+		] },
+		{ name: 'Four', layouts: [
+			[ '1_2', '1_6', '1_6', '1_6' ], [ '1_6', '1_6', '1_6', '1_2' ], [ '1_6', '1_3', '1_3', '1_6' ], [ '1_3', '1_6', '1_6', '1_3' ],
+			[ '1_12', '5_12', '5_12', '1_12' ], [ '1_2', '1_4', '1_6', '1_12' ], [ '1_12', '1_6', '1_4', '1_2' ], [ '3_4', '1_12', '1_12', '1_12' ]
+		] },
+		{ name: 'Five', layouts: [
+			[ '1_3', '1_6', '1_6', '1_6', '1_6' ], [ '1_6', '1_6', '1_6', '1_6', '1_3' ], [ '1_6', '1_6', '1_3', '1_6', '1_6' ],
+			[ '1_4', '1_4', '1_6', '1_6', '1_6' ], [ '1_6', '1_6', '1_6', '1_4', '1_4' ]
+		] }
+	];
+
 	/** Even-split N columns across the 12-grid (remainder spread to the first
 	 *  columns), returning an array of width fraction ids. Always sums to 12. */
 	function evenWidths( count ) {
@@ -154,6 +196,7 @@
 	 *  trees wrap columns in an explicit row). */
 	function columnArrayOf( node ) {
 		if ( ! node._items ) { node._items = []; }
+		if ( node.type === 'flexbox' ) { return node._items; } // flexbox children live directly in _items (no row wrap)
 		var hasCol = node._items.some( function ( it ) { return it && it.type === 'column'; } );
 		if ( hasCol || ! node._items.length ) { return node._items; }
 		var row = node._items.filter( function ( it ) { return it && it.type === 'row'; } )[ 0 ];
@@ -704,8 +747,13 @@
 		buildStructurePicker: function () {
 			var self = this;
 			var l10n = cfg.l10n || {};
-			var types = cfg.sectionTypes || [ { id: 'section', title: 'Standard' } ];
-
+			var tiles = cfg.flexboxTiles || [
+				{ id: 'section', title: 'Section', html_tag: 'section', display: 'block' },
+				{ id: 'block',   title: 'Block',   html_tag: 'div', display: 'block' },
+				{ id: 'flexbox', title: 'Flexbox', html_tag: 'div', display: 'flex' },
+				{ id: 'grid',    title: 'Grid',    html_tag: 'div', display: 'grid' }
+			];
+			var icons = { section: '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="2" y="9" width="56" height="22" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>', block: '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="14" y="9" width="32" height="22" rx="5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>', flexbox: '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="4" y="12" width="14" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="22" y="12" width="14" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="40" y="12" width="16" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>', grid: '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="4" y="6" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="23" y="6" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="42" y="6" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="4" y="22" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="23" y="22" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="42" y="22" width="14" height="12" rx="1.5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>' };
 			var $pick = this.$.picker = $(
 				'<div class="fw-le-picker-backdrop" style="display:none">' +
 					'<div class="fw-le-picker" role="dialog" aria-modal="true">' +
@@ -713,50 +761,26 @@
 							'<strong>' + ( l10n.structure || 'Choose a structure' ) + '</strong>' +
 							'<button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button>' +
 						'</div>' +
-						'<div class="fw-le-picker__types"></div>' +
-						'<div class="fw-le-picker__grid"></div>' +
+						'<div class="fw-le-picker__grid fw-le-picker__grid--div"></div>' +
 					'</div>' +
 				'</div>'
 			).appendTo( 'body' );
-
-			// Section-type pills (only when more than one type exists).
-			var $types = $pick.find( '.fw-le-picker__types' );
-			if ( types.length > 1 ) {
-				$types.append( '<span class="fw-le-picker__typelbl">' + ( l10n.sectionType || 'Section type' ) + '</span>' );
-				types.forEach( function ( t, i ) {
-					var $p = $( '<button type="button" class="fw-le-picker__type"></button>' )
-						.attr( 'data-type', t.id ).text( t.title );
-					if ( i === 0 ) { $p.addClass( 'is-active' ); }
-					$types.append( $p );
-				} );
-				this.pickerType = types[ 0 ].id;
-				$types.on( 'click', '.fw-le-picker__type', function () {
-					$types.find( '.fw-le-picker__type' ).removeClass( 'is-active' );
-					$( this ).addClass( 'is-active' );
-					self.pickerType = $( this ).attr( 'data-type' );
-				} );
-			} else {
-				this.pickerType = types[ 0 ] ? types[ 0 ].id : 'section';
-				$types.hide();
-			}
-
-			// Layout tiles (CSS-drawn column splits).
 			var $grid = $pick.find( '.fw-le-picker__grid' );
-			LAYOUTS.forEach( function ( lay, idx ) {
-				var bars = lay.parts.map( function ( p ) {
-					return '<span style="flex:' + p + '"></span>';
-				} ).join( '' );
-				var $tile = $( '<button type="button" class="fw-le-picker__tile"><span class="fw-le-picker__cols">' + bars + '</span></button>' );
-				$tile.attr( 'data-idx', idx ).attr( 'title', lay.parts.length + ' column' + ( lay.parts.length > 1 ? 's' : '' ) );
+			tiles.forEach( function ( tile ) {
+				var $tile = $( '<button type="button" class="fw-le-picker__tile fw-le-picker__tile--div"></button>' )
+					.attr( 'data-id', tile.id ).attr( 'title', tile.desc || tile.title )
+					.html( '<span class="fw-le-picker__ticon">' + ( icons[ tile.id ] || '' ) + '</span><span class="fw-le-picker__tlabel">' + tile.title + '</span>' );
 				$grid.append( $tile );
 			} );
-
 			$grid.on( 'click', '.fw-le-picker__tile', function () {
-				var lay = LAYOUTS[ parseInt( $( this ).attr( 'data-idx' ), 10 ) ];
-				if ( lay ) { self.addSection( lay.cols, self.pickerType ); }
+				var id = $( this ).attr( 'data-id' );
+				var tile = tiles.filter( function ( x ) { return x.id === id; } )[ 0 ];
 				self.closeStructurePicker();
+				// The Grid tile opens the column-layout picker first (parity with the backend); the
+				// Section / Flexbox tiles drop their empty container straight away.
+				if ( id === 'grid' ) { self.openGridPicker(); return; }
+				if ( tile ) { self.addFlexbox( { html_tag: tile.html_tag, display: tile.display } ); }
 			} );
-
 			$pick.find( '.fw-le-picker__close' ).on( 'click', function () { self.closeStructurePicker(); } );
 			$pick.on( 'click', function ( e ) { if ( e.target === $pick[ 0 ] ) { self.closeStructurePicker(); } } );
 		},
@@ -801,6 +825,155 @@
 
 				$( 'body' ).addClass( 'fw-le-panel-open' );
 			} );
+		},
+
+		/** The page-root id of the LAST section — a classic `section` item OR a Section-tag Flexbox
+		 *  (html_tag=section). Used to encapsulate root-added Block / Flexbox / Grid Divs. */
+		lastSectionId: function () {
+			for ( var i = this.model.length - 1; i >= 0; i-- ) {
+				var it = this.model[ i ];
+				if ( ! it ) { continue; }
+				var t = it.type;
+				var isSec = ( t === 'section' || /section$/.test( t )
+					|| ( t === 'flexbox' && it.atts && it.atts.html_tag === 'section' ) );
+				if ( isSec ) { return ( it.atts && it.atts.unique_id ) || it.unique_id; }
+			}
+			return null;
+		},
+
+		/** Insert a Div structure (Section / Block / Flexbox / Grid preset). SECTION-based root:
+		 *  only a Section lives at the page root; a Block / Flexbox / Grid Div is placed INSIDE the
+		 *  last section, or — when the page has none yet — a new Section is created to hold it (so a
+		 *  bare Div is never orphaned at the root). The optional `done(id)` fires with the new id.
+		 *  The server builds + renders each node (structure-correction on); we splice it into the
+		 *  model and drop its HTML in the right place. */
+		addFlexbox: function ( opts, done ) {
+			var self = this;
+			opts = opts || {};
+
+			// A Block / Flexbox / Grid Div (html_tag !== section) must be encapsulated in a section.
+			if ( opts.html_tag !== 'section' ) {
+				var targetId = self.lastSectionId();
+				if ( targetId ) { self.insertFlexboxInto( targetId, opts, done ); return; }
+				// No section yet → make one, then nest this Div inside it.
+				self.addFlexbox( { html_tag: 'section', display: 'block' }, function ( secId ) {
+					if ( secId ) { self.insertFlexboxInto( secId, opts, done ); }
+					else if ( done ) { done( null ); }
+				} );
+				return;
+			}
+
+			// Section tile → a fresh section at the page root.
+			var data = { html_tag: 'section', display: opts.display || 'block' };
+			if ( opts.cols && opts.cols.length ) { data.cols = JSON.stringify( opts.cols ); }
+			this.ajax( cfg.actions.newFlexbox, data, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new section failed', resp );
+					if ( done ) { done( null ); }
+					return;
+				}
+				var item = resp.data.item;
+				var id   = ( item.atts && item.atts.unique_id ) || item.unique_id;
+				var prevLast = self.model.length ? self.model[ self.model.length - 1 ] : null;
+				var afterId  = prevLast ? ( ( prevLast.atts && prevLast.atts.unique_id ) || prevLast.unique_id ) : null;
+				self.recordHistory();
+				self.model.push( item );
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+				self.toFrame( 'insert-section', { html: resp.data.html, id: id, afterId: afterId } );
+				self.refreshNavigator();
+				$( 'body' ).addClass( 'fw-le-panel-open' );
+				if ( done ) { done( id ); }
+			} );
+		},
+
+		/** Build a Div structure and nest it as the last child of `parentId` (a section) — the
+		 *  encapsulation target. Mirrors addElement()'s child-insert (splice into _items + the
+		 *  frame's `insert-element`), but for a Flexbox/Grid/Block node from `newFlexbox`. */
+		insertFlexboxInto: function ( parentId, opts, done ) {
+			var self = this;
+			opts = opts || {};
+			var data = { html_tag: opts.html_tag || 'div', display: opts.display || 'flex' };
+			if ( opts.cols && opts.cols.length ) { data.cols = JSON.stringify( opts.cols ); }
+			this.ajax( cfg.actions.newFlexbox, data, function ( resp ) {
+				if ( ! ( resp && resp.success && resp.data && resp.data.item ) ) {
+					window.console && console.error( '[fw-le-shell] new flexbox failed', resp );
+					if ( done ) { done( null ); }
+					return;
+				}
+				var item   = resp.data.item;
+				var id     = ( item.atts && item.atts.unique_id ) || item.unique_id;
+				var target = self.index[ parentId ];
+				if ( ! target ) { if ( done ) { done( null ); } return; }
+				var node = target.node;
+				if ( ! node._items ) { node._items = []; }
+				self.recordHistory();
+				node._items.push( item );
+				self.rebuildIndex();
+				self.markDirty();
+				self.syncFrameModel();
+				self.toFrame( 'insert-element', { html: resp.data.html, targetParentId: parentId, id: id } );
+				self.refreshNavigator();
+				$( 'body' ).addClass( 'fw-le-panel-open' );
+				if ( done ) { done( id ); }
+			} );
+		},
+
+		/** Insert a Grid Div pre-filled with the chosen column layout (Insert Grid parity). */
+		addGrid: function ( cols ) {
+			this.addFlexbox( { html_tag: 'div', display: 'grid', cols: cols } );
+		},
+
+		/* ---- Insert Grid picker (choose a column layout for the Grid tile) --- */
+
+		/** Open the Insert Grid layout picker — tabbed by column count, mirroring the backend
+		 *  Grid tile's modal. Picking a layout drops a Grid Div already filled with those columns. */
+		openGridPicker: function () {
+			var self = this;
+			var l10n = cfg.l10n || {};
+			if ( this.$.gridPicker ) { this.$.gridPicker.remove(); }
+			var tabs = '', panels = '';
+			GRID_GROUPS_LE.forEach( function ( grp, gi ) {
+				tabs += '<button type="button" class="fw-le-gtab' + ( gi === 0 ? ' is-active' : '' ) +
+					'" data-tab="' + gi + '">' + grp.name + '</button>';
+				var cards = '';
+				grp.layouts.forEach( function ( L ) {
+					var bars = '';
+					L.forEach( function ( w ) { bars += '<span style="flex:' + gridFrOf( w ) + '"></span>'; } );
+					cards += '<button type="button" class="fw-le-picker__tile fw-le-coltile fw-le-gtile" data-cols="' + L.join( ',' ) + '">' +
+						'<span class="fw-le-picker__cols">' + bars + '</span>' +
+						'<span class="fw-le-coltile__lbl">' + gridLabel( L ) + '</span></button>';
+				} );
+				panels += '<div class="fw-le-gpanel' + ( gi === 0 ? ' is-active' : '' ) +
+					'" data-panel="' + gi + '"><div class="fw-le-picker__grid fw-le-picker__grid--col">' + cards + '</div></div>';
+			} );
+			var $pick = this.$.gridPicker = $(
+				'<div class="fw-le-picker-backdrop" style="display:none">' +
+					'<div class="fw-le-picker fw-le-picker--col fw-le-picker--grid" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-picker__head"><strong>' + ( l10n.insertGrid || 'Insert Grid' ) +
+							'</strong><button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button></div>' +
+						'<div class="fw-le-gtabs">' + tabs + '</div>' +
+						'<div class="fw-le-gbody">' + panels + '</div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+			var close = function () { $pick.remove(); self.$.gridPicker = null; };
+			$pick.on( 'click', '.fw-le-gtab', function () {
+				var t = $( this ).attr( 'data-tab' );
+				$pick.find( '.fw-le-gtab' ).removeClass( 'is-active' );
+				$( this ).addClass( 'is-active' );
+				$pick.find( '.fw-le-gpanel' ).removeClass( 'is-active' );
+				$pick.find( '.fw-le-gpanel[data-panel="' + t + '"]' ).addClass( 'is-active' );
+				$pick.find( '.fw-le-gbody' ).scrollTop( 0 );
+			} );
+			$pick.on( 'click', '.fw-le-gtile', function () {
+				self.addGrid( $( this ).attr( 'data-cols' ).split( ',' ) );
+				close();
+			} );
+			$pick.find( '.fw-le-picker__close' ).on( 'click', close );
+			$pick.on( 'click', function ( e ) { if ( e.target === $pick[ 0 ] ) { close(); } } );
+			$pick.css( 'display', 'flex' );
 		},
 
 		/* ---- column picker (add a column of a chosen width) ------------ */
@@ -3016,6 +3189,29 @@
 					} );
 
 					self.modal.open();
+
+					// Max Width is an AUTO-only field, exactly as in the page builder
+					// (see column/includes/page-builder-column-item/static/js/scripts.js).
+					// Without this the Live Editor offered the control on fixed-fraction
+					// columns, where it does nothing.
+					//
+					// Same CSS approach as the builder rather than a .hide(): the Layout
+					// tab renders lazily, so hiding on open runs before the field exists.
+					// Tagging the modal lets the rule apply whenever the field paints.
+					if ( node && node.type === 'column' ) {
+						if ( ! document.getElementById( 'fw-col-mw-css' ) ) {
+							var mwStyle = document.createElement( 'style' );
+							mwStyle.id = 'fw-col-mw-css';
+							mwStyle.textContent = '.fw-col-mw-hide .fw-backend-option:has([name*="[max_width]"]){display:none !important;}';
+							( document.head || document.documentElement ).appendChild( mwStyle );
+						}
+						var colW   = String( node.width || '' );
+						var isAuto = ( colW === 'col' || colW === 'auto' );
+						window.setTimeout( function () {
+							$( '.fw-options-modal' ).filter( ':visible' ).last()
+								.toggleClass( 'fw-col-mw-hide', ! isAuto );
+						}, 0 );
+					}
 				} );
 			} );
 		},
@@ -3049,7 +3245,7 @@
 			this.renderTimers[ id ] = window.setTimeout( function () {
 				self.ajax( cfg.actions.renderItem, { item: JSON.stringify( node ) }, function ( resp ) {
 					if ( resp && resp.success && resp.data && typeof resp.data.html === 'string' ) {
-						self.toFrame( 'replace', { id: id, html: resp.data.html } );
+						self.toFrame( 'replace', { id: id, html: resp.data.html, styles: resp.data.styles } );
 					} else {
 						window.console && console.error( '[fw-le-shell] render failed', resp );
 					}
