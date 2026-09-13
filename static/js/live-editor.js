@@ -927,15 +927,45 @@
 
 		/* ---- Insert Grid picker (choose a column layout for the Grid tile) --- */
 
-		/** Open the Insert Grid layout picker — tabbed by column count, mirroring the backend
-		 *  Grid tile's modal. Picking a layout drops a Grid Div already filled with those columns. */
-		openGridPicker: function () {
+		/** Shared tabbed "Insert" modal used by BOTH Add Section's Grid tile and Add
+		 *  Column. `opts.withBasic` prepends a "Basic" tab holding the Block + Flexbox
+		 *  primitives (the flexbox-native replacement for the old bootstrap-twelfths
+		 *  column palette); the remaining tabs are the column-count grid presets. When
+		 *  `opts.sectionId` is set every choice is inserted INTO that section (a Block /
+		 *  Flexbox / Grid Div child); otherwise it drops at the page root (Add Section).
+		 *    opts = { title, withBasic, sectionId, activeTab } */
+		openInsertPicker: function ( opts ) {
+			opts = opts || {};
 			var self = this;
 			var l10n = cfg.l10n || {};
+			var sectionId = opts.sectionId || null;
 			if ( this.$.gridPicker ) { this.$.gridPicker.remove(); }
+
+			// Block / Flexbox thumbnails reuse the structure picker's glyph set.
+			var BASIC_ICONS = {
+				block:   '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="14" y="9" width="32" height="22" rx="5" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>',
+				flexbox: '<svg viewBox="0 0 60 40" width="42" height="28"><rect x="4" y="12" width="14" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="22" y="12" width="14" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/><rect x="40" y="12" width="16" height="16" rx="2" fill="#e7ebfc" stroke="#3858e9" stroke-width="2"/></svg>'
+			};
+
+			var activeTab = opts.activeTab != null ? String( opts.activeTab ) : ( opts.withBasic ? 'basic' : '0' );
 			var tabs = '', panels = '';
+
+			if ( opts.withBasic ) {
+				var basicActive = ( activeTab === 'basic' );
+				tabs += '<button type="button" class="fw-le-gtab' + ( basicActive ? ' is-active' : '' ) +
+					'" data-tab="basic">' + ( l10n.basic || 'Basic' ) + '</button>';
+				var btiles =
+					'<button type="button" class="fw-le-picker__tile fw-le-picker__tile--div fw-le-btile" data-display="block" title="' + ( l10n.blockDesc || 'A plain block container — children stack.' ) + '">' +
+						'<span class="fw-le-picker__ticon">' + BASIC_ICONS.block + '</span><span class="fw-le-picker__tlabel">' + ( l10n.block || 'Block' ) + '</span></button>' +
+					'<button type="button" class="fw-le-picker__tile fw-le-picker__tile--div fw-le-btile" data-display="flex" title="' + ( l10n.flexboxDesc || 'A flex container — lay children in a row/column.' ) + '">' +
+						'<span class="fw-le-picker__ticon">' + BASIC_ICONS.flexbox + '</span><span class="fw-le-picker__tlabel">' + ( l10n.flexbox || 'Flexbox' ) + '</span></button>';
+				panels += '<div class="fw-le-gpanel' + ( basicActive ? ' is-active' : '' ) +
+					'" data-panel="basic"><div class="fw-le-picker__grid fw-le-picker__grid--div">' + btiles + '</div></div>';
+			}
+
 			GRID_GROUPS_LE.forEach( function ( grp, gi ) {
-				tabs += '<button type="button" class="fw-le-gtab' + ( gi === 0 ? ' is-active' : '' ) +
+				var gActive = ( activeTab === String( gi ) );
+				tabs += '<button type="button" class="fw-le-gtab' + ( gActive ? ' is-active' : '' ) +
 					'" data-tab="' + gi + '">' + grp.name + '</button>';
 				var cards = '';
 				grp.layouts.forEach( function ( L ) {
@@ -945,13 +975,14 @@
 						'<span class="fw-le-picker__cols">' + bars + '</span>' +
 						'<span class="fw-le-coltile__lbl">' + gridLabel( L ) + '</span></button>';
 				} );
-				panels += '<div class="fw-le-gpanel' + ( gi === 0 ? ' is-active' : '' ) +
+				panels += '<div class="fw-le-gpanel' + ( gActive ? ' is-active' : '' ) +
 					'" data-panel="' + gi + '"><div class="fw-le-picker__grid fw-le-picker__grid--col">' + cards + '</div></div>';
 			} );
+
 			var $pick = this.$.gridPicker = $(
 				'<div class="fw-le-picker-backdrop" style="display:none">' +
 					'<div class="fw-le-picker fw-le-picker--col fw-le-picker--grid" role="dialog" aria-modal="true">' +
-						'<div class="fw-le-picker__head"><strong>' + ( l10n.insertGrid || 'Insert Grid' ) +
+						'<div class="fw-le-picker__head"><strong>' + ( opts.title || l10n.insert || 'Insert' ) +
 							'</strong><button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button></div>' +
 						'<div class="fw-le-gtabs">' + tabs + '</div>' +
 						'<div class="fw-le-gbody">' + panels + '</div>' +
@@ -967,8 +998,18 @@
 				$pick.find( '.fw-le-gpanel[data-panel="' + t + '"]' ).addClass( 'is-active' );
 				$pick.find( '.fw-le-gbody' ).scrollTop( 0 );
 			} );
+			// Grid preset → a Grid Div pre-filled with the chosen columns.
 			$pick.on( 'click', '.fw-le-gtile', function () {
-				self.addGrid( $( this ).attr( 'data-cols' ).split( ',' ) );
+				var cols = $( this ).attr( 'data-cols' ).split( ',' );
+				if ( sectionId ) { self.insertFlexboxInto( sectionId, { html_tag: 'div', display: 'grid', cols: cols } ); }
+				else { self.addGrid( cols ); }
+				close();
+			} );
+			// Basic primitive → a single Block / Flexbox child.
+			$pick.on( 'click', '.fw-le-btile', function () {
+				var display = $( this ).attr( 'data-display' ) || 'block';
+				if ( sectionId ) { self.insertFlexboxInto( sectionId, { html_tag: 'div', display: display } ); }
+				else { self.addFlexbox( { html_tag: 'div', display: display } ); }
 				close();
 			} );
 			$pick.find( '.fw-le-picker__close' ).on( 'click', close );
@@ -976,81 +1017,27 @@
 			$pick.css( 'display', 'flex' );
 		},
 
+		/** Add Section → Grid tile: the column-count grid presets, no Basic tab (the
+		 *  Section / Block / Flexbox primitives already live on the structure picker). */
+		openGridPicker: function () {
+			this.openInsertPicker( { title: ( cfg.l10n && cfg.l10n.insertGrid ) || 'Insert Grid', withBasic: false, activeTab: 0 } );
+		},
+
 		/* ---- column picker (add a column of a chosen width) ------------ */
 
-		/** Open the column-width modal for a section. Matches the classic backend
-		 *  builder: every grid width (1/1 … 1/12) is offered, and picking one adds a
-		 *  SINGLE column of exactly that width. Existing columns are untouched; the
-		 *  grid wraps a row that overflows 12 (e.g. a 1/4 added to a full 1/1 row
-		 *  drops to a new row on the left). */
+		/** Add Column: open the shared tabbed Insert modal scoped to this section, with
+		 *  the "Basic" tab (Block / Flexbox primitives) first + active. The old rigid
+		 *  bootstrap-twelfths width palette (1/1 … 1/12, Auto, Container) is retired —
+		 *  a column is now a flexbox-native Block / Flexbox / Grid Div, drag-resized. */
 		openColumnPicker: function ( sectionId ) {
 			var entry = sectionId && this.index[ sectionId ];
 			if ( ! entry || ! isContainer( entry.node ) ) { return; }
-
-			var self = this;
-			var l10n = cfg.l10n || {};
-
-			if ( this.$.colPicker ) { this.$.colPicker.remove(); }
-			var $pick = this.$.colPicker = $(
-				'<div class="fw-le-picker-backdrop" style="display:none">' +
-					'<div class="fw-le-picker fw-le-picker--col" role="dialog" aria-modal="true">' +
-						'<div class="fw-le-picker__head">' +
-							'<strong>' + ( l10n.addColumn || 'Add Column' ) + '</strong>' +
-							'<button type="button" class="fw-le-picker__close" aria-label="Close">&times;</button>' +
-						'</div>' +
-						'<div class="fw-le-picker__grid fw-le-picker__grid--col"></div>' +
-					'</div>' +
-				'</div>'
-			).appendTo( 'body' );
-
-			// Build the width tiles in the SAME order the backend Page Builder's Layout
-			// Elements tab uses (halves, thirds, quarters, sixths, twelfths, the four
-			// fifths, then Auto Column), so the two palettes match.
-			var tiles = [
-				{ id: '1_1',   flex: 12,  pct: 100 },
-				{ id: '1_2',   flex: 6,   pct: 50 },
-				{ id: '1_3',   flex: 4,   pct: 33 },
-				{ id: '2_3',   flex: 8,   pct: 67 },
-				{ id: '1_4',   flex: 3,   pct: 25 },
-				{ id: '3_4',   flex: 9,   pct: 75 },
-				{ id: '1_6',   flex: 2,   pct: 17 },
-				{ id: '5_6',   flex: 10,  pct: 83 },
-				{ id: '1_12',  flex: 1,   pct: 8 },
-				{ id: '5_12',  flex: 5,   pct: 42 },
-				{ id: '7_12',  flex: 7,   pct: 58 },
-				{ id: '11_12', flex: 11,  pct: 92 },
-				{ id: '1_5',   flex: 2.4, pct: 20 },
-				{ id: '2_5',   flex: 4.8, pct: 40 },
-				{ id: '3_5',   flex: 7.2, pct: 60 },
-				{ id: '4_5',   flex: 9.6, pct: 80 },
-				{ id: 'col',   flex: 12,  pct: null, label: 'Auto Column', auto: true },
-				{ id: 'container', flex: 12, pct: null, label: 'Container', container: true }
-			]
-
-			var $grid = $pick.find( '.fw-le-picker__grid' );
-			for ( var i = 0; i < tiles.length; i++ ) {
-				var t = tiles[ i ];
-				var $tile = $(
-					'<button type="button" class="fw-le-picker__tile fw-le-coltile' + ( t.auto ? ' fw-le-coltile--auto' : '' ) + ( t.container ? ' fw-le-coltile--container' : '' ) + '">' +
-						'<span class="fw-le-picker__cols"><span style="flex:' + t.flex + '"></span><span class="fw-le-coltile__rest" style="flex:' + ( 12 - t.flex ) + '"></span></span>' +
-						'<span class="fw-le-coltile__lbl">' + ( t.label || fracOf( t.id ) ) + '</span>' +
-					'</button>'
-				);
-				$tile.attr( 'data-width', t.id ).attr( 'title', ( t.label || fracOf( t.id ) ) + ( t.pct != null ? '  (' + t.pct + '%)' : '' ) );
-				$grid.append( $tile );
-			}
-
-			$grid.on( 'click', '.fw-le-coltile', function () {
-				var _w = $( this ).attr( 'data-width' );
-				if ( _w === 'container' ) { self.addContainer( sectionId ); }
-				else { self.addColumn( sectionId, _w ); }
-				$pick.remove();
-				self.$.colPicker = null;
+			this.openInsertPicker( {
+				title:     ( cfg.l10n && cfg.l10n.insert ) || 'Insert',
+				withBasic: true,
+				sectionId: sectionId,
+				activeTab: 'basic'
 			} );
-			$pick.find( '.fw-le-picker__close' ).on( 'click', function () { $pick.remove(); self.$.colPicker = null; } );
-			$pick.on( 'click', function ( e ) { if ( e.target === $pick[ 0 ] ) { $pick.remove(); self.$.colPicker = null; } } );
-
-			$pick.css( 'display', 'flex' );
 		},
 
 		/** Append a SINGLE column of `width` to a section — exactly like the backend
