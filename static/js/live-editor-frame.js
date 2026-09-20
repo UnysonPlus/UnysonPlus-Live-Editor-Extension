@@ -330,6 +330,7 @@
 				this.ensureAddSectionZone();
 				this.ensureSectionAddColZones();
 				this.refreshHiddenMarks();
+				this.setupChromeTags();
 				this.log( 'started; indexed', Object.keys( this.index ).length, 'items' );
 			} else if ( data.type === 'replace' ) {
 				this.replaceItem( data.payload );
@@ -1769,6 +1770,79 @@
 			} );
 		},
 
+		/* ---- header / footer chrome tags ------------------------------- *
+		 * The theme's rendered header + footer are already in this frame's DOM,
+		 * but they are NOT page-builder items (no editable model here). Rather
+		 * than fake inline editing, pin a small "Edit Header / Edit Footer" badge
+		 * to each region that opens the right place in a NEW browser tab — the
+		 * Theme Settings Header/Footer tab, or, when a Theme Builder part renders
+		 * the region, that part's builder. Both URLs are resolved server-side and
+		 * arrive in `config.chrome` ({ header:{url,label,title}, footer:{...} }). */
+		setupChromeTags: function () {
+			var chrome = this.config.chrome;
+			if ( ! chrome ) { return; }
+			var self = this;
+			[ 'header', 'footer' ].forEach( function ( kind ) {
+				var spec = chrome[ kind ];
+				if ( ! spec || ! spec.url ) { return; }
+				var region = self.findChromeRegion( kind );
+				if ( ! region ) { return; }
+				self.attachChromeTag( region, kind, spec );
+			} );
+		},
+
+		/** The outermost <header>/<footer> region of the theme chrome — skipping any
+		 *  that sits inside a builder item (a section's own <header>, etc.). */
+		findChromeRegion: function ( kind ) {
+			var sels = kind === 'header'
+				? [ 'header.fw-tb-header', '#masthead', 'header[role="banner"]', 'body > header', '.site-header', 'header' ]
+				: [ 'footer.fw-tb-footer', '#colophon', 'footer[role="contentinfo"]', 'body > footer', '.site-footer', 'footer' ];
+			for ( var i = 0; i < sels.length; i++ ) {
+				var els = document.querySelectorAll( sels[ i ] );
+				for ( var j = 0; j < els.length; j++ ) {
+					var el = els[ j ];
+					// Not a chrome region if it lives inside the page's builder content.
+					if ( el.closest( '[data-fw-item-id]' ) ) { continue; }
+					// Nor if it is (or is inside) the editor's own injected chrome.
+					if ( el.closest( '#fw-le-overlay, .fw-le-add-section-zone, .fw-le-addcol-zone' ) ) { continue; }
+					return el;
+				}
+			}
+			return null;
+		},
+
+		/** Pin the badge to a region. Gives the region a positioning context only
+		 *  when it is statically positioned (relative-with-no-offset never shifts
+		 *  layout, and a sticky/relative/absolute header already is a context). */
+		attachChromeTag: function ( region, kind, spec ) {
+			if ( region.querySelector( ':scope > .fw-le-chrome-tag' ) ) { return; }
+			try {
+				if ( window.getComputedStyle( region ).position === 'static' ) {
+					region.style.position = 'relative';
+				}
+			} catch ( e ) {}
+			region.classList.add( 'fw-le-chrome-region' );
+
+			var GEAR = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M8 5.4A2.6 2.6 0 1 0 8 10.6 2.6 2.6 0 0 0 8 5.4zm5.6 2.6c0 .3 0 .6-.1.9l1.3 1-.9 1.6-1.6-.5c-.4.4-.9.6-1.4.8L10.6 15H8.8l-.3-1.7c-.5-.2-1-.4-1.4-.8l-1.6.5-.9-1.6 1.3-1c0-.3-.1-.6-.1-.9s0-.6.1-.9l-1.3-1 .9-1.6 1.6.5c.4-.4.9-.6 1.4-.8L8.8 1h1.8l.3 1.7c.5.2 1 .4 1.4.8l1.6-.5.9 1.6-1.3 1c.1.3.1.6.1.9z" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round"/></svg>';
+			var tag = document.createElement( 'button' );
+			tag.type = 'button';
+			tag.className = 'fw-le-chrome-tag fw-le-chrome-tag--' + kind;
+			tag.setAttribute( 'title', spec.title || ( 'Edit ' + kind + ' in a new tab' ) );
+			tag.innerHTML = '<span class="fw-le-chrome-tag__ic">' + GEAR + '</span>' +
+				'<span class="fw-le-chrome-tag__lbl"></span>';
+			tag.querySelector( '.fw-le-chrome-tag__lbl' ).textContent = spec.label || ( 'Edit ' + kind );
+
+			tag.addEventListener( 'click', function ( e ) {
+				e.preventDefault();
+				e.stopPropagation();
+				window.open( spec.url, '_blank', 'noopener' );
+			} );
+			// Don't let a hover over the badge try to select the region beneath it.
+			tag.addEventListener( 'mouseover', function ( e ) { e.stopPropagation(); }, true );
+
+			region.appendChild( tag );
+		},
+
 		bindEvents: function () {
 			var self = this;
 
@@ -1784,6 +1858,8 @@
 				// Editor chrome injected into the canvas (add-section / add-column
 				// bars) handles its own clicks — don't hijack them for selection.
 				if ( e.target.closest && e.target.closest( '.fw-le-addcol-zone, .fw-le-add-section-zone' ) ) { return; }
+				// The header/footer "Edit …" badge handles its own click (opens a new tab).
+				if ( e.target.closest && e.target.closest( '.fw-le-chrome-tag' ) ) { return; }
 				var hit = self.selectableFrom( e.target );
 				if ( hit ) {
 					e.preventDefault();

@@ -136,9 +136,12 @@ body.fw-live-editor-frame-active .fw-le-add-section-btn {
 	align-items: center;
 	gap: 10px;
 	padding: 12px 22px;
-	background: rgba( 79, 140, 255, .06 );
-	border: 1px dashed color-mix(in srgb, var(--fw-accent, #3858e9) 55%, #fff);
+	/* Solid background so the button reads on ANY theme (a translucent tint vanished
+	 * on dark canvases). Matches the Add Column pill's language, one size up. */
+	background: #fff;
+	border: 1px dashed color-mix(in srgb, var(--fw-accent, #3858e9) 45%, #fff);
 	border-radius: 8px;
+	box-shadow: 0 2px 10px rgba( 0, 0, 0, .12 );
 	color: color-mix(in srgb, var(--fw-accent, #3858e9) 78%, #000);
 	font-size: 13px;
 	font-weight: 600;
@@ -148,7 +151,7 @@ body.fw-live-editor-frame-active .fw-le-add-section-btn {
 }
 
 body.fw-live-editor-frame-active .fw-le-add-section-btn:hover {
-	background: rgba( 79, 140, 255, .12 );
+	background: color-mix(in srgb, var(--fw-accent, #3858e9) 8%, #fff);
 	border-color: var(--fw-accent, #3858e9);
 	color: color-mix(in srgb, var(--fw-accent, #3858e9) 62%, #000);
 }
@@ -571,3 +574,55 @@ html.fw-le-drag-active * {
 	-webkit-user-select: none !important;
 }
 
+
+/* -------------------------------------------------------------------------
+ * Header / footer "Edit …" chrome badge
+ * A small pill pinned to the theme's header + footer regions. It is NOT a
+ * builder selection — clicking it opens Theme Settings (or the Theme Builder
+ * part) in a new browser tab. Shown on hover of its region.
+ * ---------------------------------------------------------------------- */
+.fw-le-chrome-region {
+	position: relative;
+}
+.fw-le-chrome-region:hover {
+	outline: 2px dashed rgba( 56, 88, 233, 0.5 );
+	outline-offset: -2px;
+}
+.fw-le-chrome-tag {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+	z-index: 2147483000;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	margin: 0;
+	padding: 5px 10px;
+	font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	color: #fff;
+	background: #1e2937;
+	border: 1px solid rgba( 255, 255, 255, 0.15 );
+	border-radius: 6px;
+	box-shadow: 0 4px 14px rgba( 0, 0, 0, 0.28 );
+	cursor: pointer;
+	white-space: nowrap;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.12s ease, background 0.12s ease;
+}
+.fw-le-chrome-region:hover > .fw-le-chrome-tag,
+.fw-le-chrome-tag:hover,
+.fw-le-chrome-tag:focus-visible {
+	opacity: 1;
+	pointer-events: auto;
+}
+.fw-le-chrome-tag:hover {
+	background: #2b3a4e;
+}
+.fw-le-chrome-tag__ic {
+	display: inline-flex;
+	opacity: 0.9;
+}
+.fw-le-chrome-tag__ic svg {
+	display: block;
+}

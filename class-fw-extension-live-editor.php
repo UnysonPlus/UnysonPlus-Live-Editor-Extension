@@ -1133,6 +1133,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		wp_localize_script( 'fw-live-editor-frame', '_fwLiveEditorFrame', array(
 			'postId'  => (int) get_queried_object_id(),
 			'version' => $this->manifest->get_version(),
+			// Header/footer "Edit …" badge destinations (Theme Settings tab, or a
+			// Theme Builder part), each opened in a new browser tab.
+			'chrome'  => $this->chrome_edit_targets(),
 			'l10n'   => array(
 				'firstSection'   => __( 'Add your first section', 'fw' ),
 				'addSectionHere' => __( 'Add Section', 'fw' ),
@@ -1163,6 +1166,85 @@ class FW_Extension_Live_Editor extends FW_Extension {
 				}
 			}
 		}
+	}
+
+	/**
+	 * Resolve the "Edit Header" / "Edit Footer" badge destinations for the frame.
+	 *
+	 * The theme's header + footer are not page-builder items, so instead of faking
+	 * inline editing the frame pins a badge to each region that opens the correct
+	 * place in a NEW browser tab. Runs in the front-end frame request (so the Theme
+	 * Builder resolver, which bails in wp-admin, works). A region is omitted when
+	 * the current user can't edit its source.
+	 *
+	 * @return array{header?:array,footer?:array} kind => array( url, label, title ).
+	 */
+	private function chrome_edit_targets() {
+		$out = array();
+		foreach ( array( 'header', 'footer' ) as $kind ) {
+			$spec = $this->chrome_target_for( $kind );
+			if ( $spec ) {
+				$out[ $kind ] = $spec;
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * Destination for one chrome region.
+	 *
+	 * Prefers a Theme Builder part (up_header/up_footer) that actively renders this
+	 * request — the resolver returns its id, 0 when none applies — and falls back to
+	 * the Theme Settings Header/Footer tab (deep-linked via `fw-open-tab`, which the
+	 * options-search script opens on load). Null when the user lacks the capability.
+	 *
+	 * @param string $kind 'header' | 'footer'.
+	 * @return array|null
+	 */
+	private function chrome_target_for( $kind ) {
+		$label = ( 'header' === $kind ) ? __( 'Edit Header', 'fw' ) : __( 'Edit Footer', 'fw' );
+
+		// 1) A Theme Builder part actively rendering this region.
+		$part_id = 0;
+		if ( class_exists( 'FW_Theme_Builder_Resolver' ) ) {
+			$part_id = ( 'header' === $kind )
+				? (int) FW_Theme_Builder_Resolver::header_id()
+				: (int) FW_Theme_Builder_Resolver::footer_id();
+		}
+		if ( $part_id
+			&& get_post_type( $part_id ) === 'up_' . $kind
+			&& current_user_can( 'edit_post', $part_id )
+		) {
+			$url = get_edit_post_link( $part_id, 'raw' );
+			if ( $url ) {
+				return array(
+					'url'   => $url,
+					'label' => $label,
+					'title' => __( 'Open this Theme Builder template in a new tab', 'fw' ),
+				);
+			}
+		}
+
+		// 2) Theme Settings → Header / Footer tab.
+		if ( ! current_user_can( 'edit_theme_options' ) ) {
+			return null;
+		}
+		$slug = ( function_exists( 'fw' ) && fw()->backend && method_exists( fw()->backend, '_get_settings_page_slug' ) )
+			? fw()->backend->_get_settings_page_slug()
+			: apply_filters( 'fw_get_settings_page_slug', 'fw-settings' );
+		$tab = ( 'header' === $kind ) ? 'header_settings_container' : 'footer_container';
+		$url = add_query_arg(
+			array(
+				'page'         => $slug,
+				'fw-open-tab'  => $tab . ',tab_layout',
+			),
+			admin_url( 'admin.php' )
+		);
+		return array(
+			'url'   => $url,
+			'label' => $label,
+			'title' => __( 'Open Theme Settings in a new tab', 'fw' ),
+		);
 	}
 
 	/* ---------------------------------------------------------------------
