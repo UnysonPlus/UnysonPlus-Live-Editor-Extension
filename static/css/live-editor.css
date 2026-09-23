@@ -1082,7 +1082,11 @@ body.fw-live-editor-shell .media-frame,
 body.fw-live-editor-shell .media-modal,
 body.fw-live-editor-shell .media-frame-title,
 body.fw-live-editor-shell .media-frame-title h1 {
-	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+	/* !important: a theme that declares its heading font with !important (display
+	 * themes routinely do, e.g. `h1 { font-family: … !important }`) otherwise wins,
+	 * and the modal title renders in the site's display font instead of the admin
+	 * font — matching the font-weight reset below, which already needs !important. */
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif !important;
 }
 body.fw-live-editor-shell .media-frame,
 body.fw-live-editor-shell .media-modal {
