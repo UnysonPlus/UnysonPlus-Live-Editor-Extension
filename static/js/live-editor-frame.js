@@ -359,6 +359,16 @@
 				this.hasClipboard = !! ( data.payload && data.payload.has );
 			} else if ( data.type === 'settings-paste-state' ) {
 				this.hasSettingsClipboard = !! ( data.payload && data.payload.has );
+			} else if ( data.type === 'ai-ready' ) {
+				// The AI Assistant extension is active — reveal the per-element
+				// "Ask AI" button on the selection toolbar.
+				if ( this.els && this.els.aiBtn ) { this.els.aiBtn.style.display = ''; }
+			} else if ( data.type === 'toggle-wireframe' ) {
+				this.applyWireframe( data.payload && data.payload.on );
+			} else if ( data.type === 'contrast' ) {
+				this.computeContrast( data.payload && data.payload.id );
+			} else if ( data.type === 'toggle-boxmodel' ) {
+				this.applyBoxModel( data.payload && data.payload.on );
 			} else if ( data.type === 'reflow' ) {
 				this.reposition();
 			} else if ( data.type === 'select-item' ) {
@@ -1658,6 +1668,53 @@
 
 		/* ---- model index ------------------------------------------------ */
 
+		/** Wireframe / structural x-ray: outline every stamped item, colour-coded by
+		 *  kind (section / column / element) so the whole page structure is visible at
+		 *  once. Toggled from the shell (command palette). */
+		applyWireframe: function ( on ) {
+			document.body.classList.toggle( 'fw-le-wireframe', !! on );
+			if ( ! on ) { return; }
+			var self = this;
+			Object.keys( this.index || {} ).forEach( function ( id ) {
+				var el = document.querySelector( '[data-fw-item-id="' + id + '"]' );
+				if ( ! el ) { return; }
+				var t = ( self.index[ id ] && self.index[ id ].type ) || '';
+				var kind = ( t === 'section' || /section$/.test( t ) ) ? 'section'
+					: ( t === 'column' || t === 'flexbox' || t === 'row' || t === 'container' ) ? 'col'
+					: 'el';
+				el.setAttribute( 'data-fw-le-wf', kind );
+			} );
+		},
+
+		/** WCAG contrast of a stamped element's text vs its effective background
+		 *  (walks ancestors for the first opaque background). Replies to the shell. */
+		computeContrast: function ( id ) {
+			var el = id && document.querySelector( '[data-fw-item-id="' + id + '"]' );
+			if ( ! el ) { this.toShell( 'contrast-result', { error: 1 } ); return; }
+			function parse( c ) {
+				var m = ( c || '' ).match( /rgba?\(([^)]+)\)/ );
+				if ( ! m ) { return null; }
+				var p = m[ 1 ].split( ',' ).map( function ( x ) { return parseFloat( x ); } );
+				return { r: p[ 0 ], g: p[ 1 ], b: p[ 2 ], a: p.length > 3 ? p[ 3 ] : 1 };
+			}
+			function lum( c ) {
+				var a = [ c.r, c.g, c.b ].map( function ( v ) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow( ( v + 0.055 ) / 1.055, 2.4 ); } );
+				return 0.2126 * a[ 0 ] + 0.7152 * a[ 1 ] + 0.0722 * a[ 2 ];
+			}
+			var fg = parse( getComputedStyle( el ).color ) || { r: 0, g: 0, b: 0, a: 1 };
+			var bg = null, node = el;
+			while ( node && node.nodeType === 1 ) {
+				var b = parse( getComputedStyle( node ).backgroundColor );
+				if ( b && b.a > 0 ) { bg = b; break; }
+				node = node.parentElement;
+			}
+			if ( ! bg ) { bg = { r: 255, g: 255, b: 255, a: 1 }; }
+			var l1 = lum( fg ), l2 = lum( bg );
+			var ratio = ( Math.max( l1, l2 ) + 0.05 ) / ( Math.min( l1, l2 ) + 0.05 );
+			function s( c ) { return 'rgb(' + Math.round( c.r ) + ',' + Math.round( c.g ) + ',' + Math.round( c.b ) + ')'; }
+			this.toShell( 'contrast-result', { ratio: Math.round( ratio * 100 ) / 100, aa: ratio >= 4.5, aaLarge: ratio >= 3, fg: s( fg ), bg: s( bg ) } );
+		},
+
 		buildIndex: function ( items, parentId ) {
 			if ( ! items || ! items.length ) { return; }
 			for ( var i = 0; i < items.length; i++ ) {
@@ -1670,6 +1727,7 @@
 						shortcode: it.shortcode,
 						label:     labelFor( it ),
 						parentId:  parentId,
+						note:      !! ( it.atts && it.atts._le_note ),
 						locked:    !! ( it.atts && it.atts._le_locked ),
 						// Per-device "Hide on" map ({ 'hide-md': true, … }) — drives
 						// the eye state + canvas dimming for the previewed device.
@@ -1700,7 +1758,8 @@
 				eyeOff: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M1.5 8S4 3.5 8 3.5c1.2 0 2.3.4 3.2 1M14.5 8S12 12.5 8 12.5c-1.2 0-2.3-.4-3.2-1" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 2.5l11 11" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
 				clip:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="4" y="3" width="8" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="6" y="1.6" width="4" height="2.6" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>',
 				paste: '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><rect x="3.5" y="3" width="9" height="11" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="5.5" y="1.6" width="5" height="2.6" rx="0.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 8h4M6 10.5h3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>',
-				menu:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="3" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="13" r="1.4" fill="currentColor"/></svg>'
+				menu:  '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><circle cx="8" cy="3" r="1.4" fill="currentColor"/><circle cx="8" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="13" r="1.4" fill="currentColor"/></svg>',
+				ai:    '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M8 .6c.55 4.75 2.7 6.9 7.4 7.4-4.7.5-6.85 2.65-7.4 7.4-.55-4.75-2.7-6.9-7.4-7.4C5.3 7.5 7.45 5.35 8 .6z" fill="currentColor"/><path d="M13.7 1.1c.12 1.02.53 1.43 1.55 1.55-1.02.12-1.43.53-1.55 1.55-.12-1.02-.53-1.43-1.55-1.55 1.02-.12 1.43-.53 1.55-1.55z" fill="currentColor" opacity=".85"/></svg>'
 			};
 
 			var root = document.createElement( 'div' );
@@ -1716,6 +1775,7 @@
 						'<button type="button" class="fw-le-tag__btn fw-le-act-addcol" title="Add column" style="display:none">' + SVG.addcol + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-duplicate" title="Duplicate">' + SVG.copy + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-edit" title="Edit">' + SVG.edit + '</button>' +
+						'<button type="button" class="fw-le-tag__btn fw-le-act-ai" title="Ask AI about this" style="display:none">' + SVG.ai + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-act-menu" title="More (right-click)">' + SVG.menu + '</button>' +
 						'<button type="button" class="fw-le-tag__btn fw-le-tag__btn--danger fw-le-act-delete" title="Delete">' + SVG.trash + '</button>' +
 					'</div>' +
@@ -1731,6 +1791,7 @@
 			this.els.activeBox = root.querySelector( '.fw-le-box--active' );
 			this.els.activeLbl = root.querySelector( '.fw-le-tag__label' );
 			this.els.addColBtn = root.querySelector( '.fw-le-act-addcol' );
+			this.els.aiBtn     = root.querySelector( '.fw-le-act-ai' );
 			this.els.resize    = root.querySelector( '.fw-le-resize' );
 			this.els.resizeTip = root.querySelector( '.fw-le-resize-tip' );
 			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
@@ -1761,6 +1822,9 @@
 			} );
 			on( '.fw-le-act-edit', function () {
 				if ( self.activeId ) { self.toShell( 'edit-request', { id: self.activeId } ); }
+			} );
+			on( '.fw-le-act-ai', function () {
+				if ( self.activeId ) { self.toShell( 'ask-ai', { id: self.activeId } ); }
 			} );
 			on( '.fw-le-act-delete', function () {
 				if ( ! self.activeId ) { return; }
@@ -1868,6 +1932,26 @@
 				}
 			}, { capture: true, passive: false } );
 
+			// Global editor shortcuts fired while focus is INSIDE this iframe never
+			// reach the shell's own document listener, so the browser runs its
+			// default (Ctrl+K → address-bar search). Catch them here and forward them
+			// to the shell. Ctrl/Cmd+K and Ctrl/Cmd+S work even during inline editing;
+			// undo/redo and "?" only outside a text field so native editing is intact.
+			document.addEventListener( 'keydown', function ( e ) {
+				var t = e.target, tag = t && t.tagName;
+				var inField = ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) );
+				var mod = e.ctrlKey || e.metaKey;
+				var k = ( e.key || '' ).toLowerCase();
+				if ( mod && k === 'k' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'k' } ); }
+				else if ( mod && k === 's' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 's' } ); }
+				else if ( ! inField ) {
+					if ( mod && k === 'z' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'z', shift: !! e.shiftKey } ); }
+					else if ( mod && k === 'y' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'y' } ); }
+					else if ( ! mod && e.key === '?' ) { e.preventDefault(); self.toShell( 'shortcut', { key: '?' } ); }
+					else if ( e.altKey && ( e.key === 'ArrowUp' || e.key === 'ArrowDown' ) ) { e.preventDefault(); self.toShell( 'shortcut', { key: e.key === 'ArrowUp' ? 'nudge-up' : 'nudge-down' } ); }
+				}
+			}, false );
+
 			// Double-click a text block to edit it inline (cursor at the click point).
 			document.addEventListener( 'dblclick', function ( e ) { self.onDblClick( e ); }, false );
 
@@ -1964,6 +2048,7 @@
 		setHover: function ( el ) {
 			this.hoverEl = el;
 			this.toShell( 'hover-item', { id: el ? el.getAttribute( 'data-fw-item-id' ) : null } );
+			if ( this.boxModelOn ) { if ( el ) { this.showBoxModelFor( el ); } else { this.hideBoxModel(); } }
 			if ( ! el || el === this.activeEl ) {
 				this.els.hoverBox.style.display = 'none';
 				return;
@@ -1971,12 +2056,54 @@
 			this.placeBox( this.els.hoverBox, el );
 		},
 
+		/* ---- box-model visualiser (margin / padding overlay) ----------- */
+		applyBoxModel: function ( on ) {
+			this.boxModelOn = !! on;
+			if ( ! on ) { this.hideBoxModel(); }
+		},
+		hideBoxModel: function () { if ( this.els.boxModel ) { this.els.boxModel.style.display = 'none'; } },
+		showBoxModelFor: function ( el ) {
+			var d = this.els.boxModel;
+			if ( ! d ) {
+				d = this.els.boxModel = document.createElement( 'div' );
+				d.id = 'fw-le-boxmodel'; d.setAttribute( 'aria-hidden', 'true' );
+				d.innerHTML =
+					'<i class="fw-le-bm-m fw-le-bm-mt"></i><i class="fw-le-bm-m fw-le-bm-mr"></i><i class="fw-le-bm-m fw-le-bm-mb"></i><i class="fw-le-bm-m fw-le-bm-ml"></i>' +
+					'<i class="fw-le-bm-p fw-le-bm-pt"></i><i class="fw-le-bm-p fw-le-bm-pr"></i><i class="fw-le-bm-p fw-le-bm-pb"></i><i class="fw-le-bm-p fw-le-bm-pl"></i>' +
+					'<i class="fw-le-bm-label"></i>';
+				document.body.appendChild( d );
+			}
+			d.style.display = 'block';
+			var r = el.getBoundingClientRect(), cs = getComputedStyle( el );
+			function n( v ) { return parseFloat( v ) || 0; }
+			var mt = n( cs.marginTop ), mr = n( cs.marginRight ), mb = n( cs.marginBottom ), ml = n( cs.marginLeft );
+			var pt = n( cs.paddingTop ), pr = n( cs.paddingRight ), pb = n( cs.paddingBottom ), pl = n( cs.paddingLeft );
+			function set( sel, x, y, w, h ) {
+				var e = d.querySelector( sel );
+				e.style.left = x + 'px'; e.style.top = y + 'px';
+				e.style.width = Math.max( 0, w ) + 'px'; e.style.height = Math.max( 0, h ) + 'px';
+			}
+			set( '.fw-le-bm-mt', r.left - ml, r.top - mt, r.width + ml + mr, mt );
+			set( '.fw-le-bm-mb', r.left - ml, r.bottom, r.width + ml + mr, mb );
+			set( '.fw-le-bm-ml', r.left - ml, r.top, ml, r.height );
+			set( '.fw-le-bm-mr', r.right, r.top, mr, r.height );
+			set( '.fw-le-bm-pt', r.left, r.top, r.width, pt );
+			set( '.fw-le-bm-pb', r.left, r.bottom - pb, r.width, pb );
+			set( '.fw-le-bm-pl', r.left, r.top + pt, pl, r.height - pt - pb );
+			set( '.fw-le-bm-pr', r.right - pr, r.top + pt, pr, r.height - pt - pb );
+			var lbl = d.querySelector( '.fw-le-bm-label' );
+			lbl.textContent = 'M ' + [ mt, mr, mb, ml ].map( Math.round ).join( ' ' ) + '   P ' + [ pt, pr, pb, pl ].map( Math.round ).join( ' ' );
+			lbl.style.left = r.left + 'px';
+			lbl.style.top = Math.max( 2, r.top - mt - 20 ) + 'px';
+		},
+
 		select: function ( el, id ) {
 			this.activeEl = el;
 			this.activeId = id;
 			this.setHover( null );
 			this.placeActive( el );
-			this.els.activeLbl.textContent = ( this.index[ id ] && this.index[ id ].label ) || 'Element';
+			var _m = this.index[ id ] || {};
+			this.els.activeLbl.textContent = ( _m.note ? '💬 ' : '' ) + ( _m.label || 'Element' );
 
 			var meta = this.index[ id ] || {};
 			// "+ Column" is only meaningful on a section (adds a column to it).
@@ -2005,12 +2132,18 @@
 
 			var items = [
 				{ text: 'Edit',          act: function () { self.toShell( 'edit-request', { id: id } ); } },
+				{ text: 'Spacing',       act: function () { self.toShell( 'quick-spacing', { id: id } ); } },
 				{ text: 'Duplicate', key: 'Ctrl+D', act: function () { self.toShell( 'duplicate-request', { id: id } ); } },
 				{ sep: true },
 				{ text: 'Copy', key: 'Ctrl+C', act: function () { self.toShell( 'copy-request', { id: id } ); } },
 				{ text: 'Paste', key: 'Ctrl+V', disabled: ! this.hasClipboard, act: function () { self.toShell( 'paste-request', { id: id } ); } },
 				{ text: 'Copy Settings', act: function () { self.toShell( 'copy-settings-request', { id: id } ); } },
 				{ text: 'Paste Settings', disabled: ! this.hasSettingsClipboard, act: function () { self.toShell( 'paste-settings-request', { id: id } ); } },
+				{ sep: true },
+				{ text: 'Copy as JSON', act: function () { self.toShell( 'copy-json-request', { id: id } ); } },
+				{ text: 'Paste JSON…', act: function () { self.toShell( 'paste-json-request', { id: id } ); } },
+				{ text: 'Check contrast', act: function () { self.toShell( 'check-contrast', { id: id } ); } },
+				{ text: 'Note…', act: function () { self.toShell( 'edit-note', { id: id } ); } },
 				{ sep: true },
 				{ text: ( hidden ? 'Show on ' + dev : 'Hide on ' + dev ), act: function () { self.toggleHidden( id ); } }
 			];

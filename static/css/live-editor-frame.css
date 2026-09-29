@@ -626,3 +626,51 @@ html.fw-le-drag-active * {
 .fw-le-chrome-tag__ic svg {
 	display: block;
 }
+
+/* ---- Wireframe / structural x-ray (command palette: "Toggle wireframe") ----
+ * Outlines every builder item so the page structure is visible at once, colour-
+ * coded by kind. A base outline covers items re-rendered after the toggle. */
+body.fw-le-wireframe [data-fw-item-id] {
+	outline: 1px dashed rgba( 140, 150, 180, 0.5 );
+	outline-offset: -1px;
+}
+body.fw-le-wireframe [data-fw-le-wf="section"] {
+	outline: 1px dashed rgba( 56, 88, 233, 0.85 ) !important;
+}
+body.fw-le-wireframe [data-fw-le-wf="col"] {
+	outline: 1px dashed rgba( 0, 168, 132, 0.75 ) !important;
+}
+body.fw-le-wireframe [data-fw-le-wf="el"] {
+	outline: 1px dashed rgba( 240, 180, 64, 0.7 ) !important;
+}
+
+/* The per-element "Ask AI" button — tinted so it reads as AI (a sparkle, never a
+ * "+", which means add-element), brightening on hover like the other tag tools. */
+.fw-le-tag__btn.fw-le-act-ai { color: #b7aefc; }
+.fw-le-tag__btn.fw-le-act-ai:hover { color: #fff; }
+
+/* ---- Box-model visualiser (command palette: "Toggle box model") ---------- */
+#fw-le-boxmodel {
+	position: fixed;
+	inset: 0;
+	z-index: 2147482000;
+	pointer-events: none;
+	display: none;
+}
+#fw-le-boxmodel .fw-le-bm-m,
+#fw-le-boxmodel .fw-le-bm-p {
+	position: fixed;
+	pointer-events: none;
+}
+#fw-le-boxmodel .fw-le-bm-m { background: rgba( 246, 178, 74, 0.42 ); }   /* margin — amber */
+#fw-le-boxmodel .fw-le-bm-p { background: rgba( 88, 196, 130, 0.42 ); }   /* padding — green */
+#fw-le-boxmodel .fw-le-bm-label {
+	position: fixed;
+	padding: 2px 7px;
+	font: 600 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	color: #fff;
+	background: #1d2230;
+	border-radius: 5px;
+	white-space: nowrap;
+	box-shadow: 0 2px 8px rgba( 0, 0, 0, 0.35 );
+}

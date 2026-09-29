@@ -80,6 +80,12 @@
 		return node.shortcode || node.type;
 	}
 
+	function escHtml( s ) {
+		return String( s == null ? '' : s ).replace( /[&<>"']/g, function ( c ) {
+			return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ c ];
+		} );
+	}
+
 	function isContainer( node ) {
 		var t = node.type;
 		return t === 'flexbox' || t === 'column' || t === 'row' || t === 'section' || t === 'container' || /section$/.test( t );
@@ -96,6 +102,27 @@
 	var SETTINGS_KEY  = 'fw-pb-settings-clipboard';
 	// Option types treated as CONTENT (excluded from "copy settings").
 	var CONTENT_TYPES = { 'text': 1, 'textarea': 1, 'wp-editor': 1, 'wp_editor': 1 };
+
+	/** VISIBLE-text content keys for Find & Replace. Narrower than CONTENT_TYPES:
+	 *  a `text` input can hold a URL / CSS id / CSS class, which must never be
+	 *  rewritten as prose — so exclude link/url and any *_class / *_id key. Rich
+	 *  types (textarea / wp-editor) are always content. */
+	var FR_KEY_BLOCK = { css_id: 1, css_class: 1, link: 1, url: 1, href: 1, id: 1, anchor: 1 };
+
+	/** Tags where empty visible text is genuinely a problem (Page check's "No text
+	 *  set"). Kept to text-primary elements so visual ones (icon, image, gallery…)
+	 *  aren't flagged for legitimately having no text. */
+	var TEXT_PRIMARY = {
+		special_heading: 1, heading: 1, text_block: 1, button: 1, blockquote: 1,
+		list: 1, feature_list: 1, call_to_action: 1, notification: 1, badge: 1,
+		highlight_text: 1, animated_heading: 1, tag_list: 1
+	};
+	function isContentTextKey( key, type ) {
+		if ( type === 'textarea' || type === 'wp-editor' || type === 'wp_editor' ) { return true; }
+		if ( type !== 'text' ) { return false; }
+		if ( /(_class|_id)$/.test( key ) ) { return false; }
+		return ! FR_KEY_BLOCK[ key ];
+	}
 
 	/** Walk an options tree (array of {id:def} + nested container .options) and
 	 *  return a flat map of leaf option id → option type. multi-pickers count as a
@@ -332,6 +359,7 @@
 			$( document ).on( 'keydown', this.onKeydown.bind( this ) );
 			this.setupDebug();
 			this.setupWheelScroll();
+			this.buildZoomControl();
 
 			// The clipboard is shared (localStorage) with the backend builder + other
 			// tabs; refresh the Paste control when it changes elsewhere.
@@ -489,6 +517,30 @@
 				case 'edit-request':
 					this.onSelect( data.payload );
 					this.openEditor( data.payload && data.payload.id );
+					break;
+				case 'ask-ai':
+					this.askAiAboutItem( data.payload && data.payload.id );
+					break;
+				case 'quick-spacing':
+					this.openSpacingEditor( data.payload && data.payload.id );
+					break;
+				case 'copy-json-request':
+					this.copyElementJson( data.payload && data.payload.id );
+					break;
+				case 'paste-json-request':
+					this.openPasteJson();
+					break;
+				case 'check-contrast':
+					this.toFrame( 'contrast', { id: ( data.payload && data.payload.id ) || this.selectedId } );
+					break;
+				case 'contrast-result':
+					this.showContrastResult( data.payload );
+					break;
+				case 'edit-note':
+					this.openNote( data.payload && data.payload.id );
+					break;
+				case 'shortcut':
+					this.handleForwardedShortcut( data.payload );
 					break;
 				case 'duplicate-request':
 					this.duplicateItem( data.payload && data.payload.id );
@@ -1881,6 +1933,9 @@
 				$label.attr( 'title', 'Double-click to rename' );
 			}
 			$row.append( $label );
+			if ( node.atts && node.atts._le_note ) {
+				$row.append( $( '<span class="fw-le-tree__note dashicons dashicons-testimonial" aria-hidden="true"/>' ).attr( 'title', node.atts._le_note ) );
+			}
 			if ( isSection && meta.badge ) { $row.append( $( '<span class="fw-le-tree__badge"/>' ).text( meta.badge ) ); }
 			// Drag grip at the far right of every row, revealed on hover — reorders
 				// the node among its siblings (section, column, or element).
@@ -3078,8 +3133,69 @@
 			this.toFrame( 'set-device', { device: this.device || 'desktop' } );
 			this.refreshPasteState();
 			this.refreshSettingsPasteState();
+			// If the AI Assistant extension is active, reveal the frame's per-element
+			// "Ask AI" button (its panel sets window.upwAiAssistant when it mounts).
+			this.announceAiToFrame();
 			// A restore that happened before the frame was ready: render it now.
 			if ( this.pendingRender ) { this.pendingRender = false; this.renderPageToCanvas(); }
+		},
+
+		/** Tell the frame whether the AI Assistant is available, so it can show/hide
+		 *  the per-element "Ask AI" button. The panel mounts window.upwAiAssistant
+		 *  when the extension is active — which can lag the frame-ready event, so poll
+		 *  briefly and post once it appears. */
+		announceAiToFrame: function () {
+			var self = this;
+			var have = function () {
+				return !! ( window.upwAiAssistant && typeof window.upwAiAssistant.openForElement === 'function' );
+			};
+			if ( have() ) { this.toFrame( 'ai-ready', {} ); return; }
+			if ( this._aiPolling ) { return; }
+			this._aiPolling = true;
+			var tries = 0;
+			( function wait() {
+				if ( have() ) { self._aiPolling = false; self.toFrame( 'ai-ready', {} ); return; }
+				if ( tries++ < 40 ) { window.setTimeout( wait, 200 ); }
+				else { self._aiPolling = false; }
+			}() );
+		},
+
+		/** Open the AI Assistant panel focused on ONE element: it is pre-attached as
+		 *  context so "rewrite this", "make this a pill", etc. target exactly this
+		 *  item. Falls back to the plain panel (or a notice) on an older/absent AI
+		 *  Assistant. Also selects the item so the canvas + tree reflect the target. */
+		askAiAboutItem: function ( id ) {
+			var api = window.upwAiAssistant;
+			if ( ! api || typeof api.openForElement !== 'function' ) {
+				if ( api && typeof api.open === 'function' ) { api.open(); }
+				else { notify( 'The AI Assistant extension is not active.', 'error' ); }
+				return;
+			}
+			if ( id && this.index[ id ] ) {
+				this.toFrame( 'select-item', { id: id, scroll: true } );
+				api.openForElement( this.describeItemForAI( id ) );
+			} else {
+				api.openForElement( null );
+			}
+		},
+
+		/** A compact description of an item for the AI panel: its id (so the model can
+		 *  find it in the tree), a human label, its shortcode/type, and its ancestor
+		 *  path (Section › Column › Button). */
+		describeItemForAI: function ( id ) {
+			var entry = this.index[ id ];
+			if ( ! entry ) { return null; }
+			var chain = [], cur = id, guard = 0;
+			while ( cur && this.index[ cur ] && guard++ < 30 ) {
+				chain.unshift( labelFor( this.index[ cur ].node ) );
+				cur = this.index[ cur ].parentId;
+			}
+			return {
+				id:    id,
+				label: labelFor( entry.node ),
+				type:  tagFor( entry.node ),
+				path:  chain.join( ' › ' )
+			};
 		},
 
 		/** Reflect the canvas selection as a clickable breadcrumb of the item's
@@ -3312,14 +3428,30 @@
 		},
 
 		onKeydown: function ( e ) {
-			if ( ! ( e.ctrlKey || e.metaKey ) ) { return; }
+			var t = e.target, tag = t && t.tagName;
+			var inField = ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) );
+			if ( ! ( e.ctrlKey || e.metaKey ) ) {
+				// "?" (Shift+/) opens the keyboard-shortcuts cheatsheet — but not while
+				// typing, and not while the command palette owns the keyboard.
+				if ( e.key === '?' && ! inField && ! this.$.cmdk ) { e.preventDefault(); this.toggleShortcuts(); }
+				// Alt + ↑/↓ nudges the selected element among its siblings (no drag).
+				else if ( e.altKey && ! inField && this.selectedId && ( e.key === 'ArrowUp' || e.key === 'ArrowDown' ) ) {
+					e.preventDefault(); this.nudgeItem( e.key === 'ArrowUp' ? -1 : 1 );
+				}
+				// Esc leaves distraction-free mode.
+				else if ( e.key === 'Escape' && document.body.classList.contains( 'fw-le-zen' ) ) {
+					e.preventDefault(); this.toggleZen();
+				}
+				return;
+			}
 			var k = ( e.key || '' ).toLowerCase();
 			// Save works everywhere — including inside modal fields — and blocks the
 			// browser's own Save-page dialog.
 			if ( k === 's' ) { e.preventDefault(); this.onSave(); return; }
+			// Command palette works everywhere, including inside the palette's own input.
+			if ( k === 'k' ) { e.preventDefault(); this.toggleCommandPalette(); return; }
 			// Let form fields (e.g. the options modal) keep their native undo.
-			var t = e.target, tag = t && t.tagName;
-			if ( tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ( t && t.isContentEditable ) ) { return; }
+			if ( inField ) { return; }
 			if ( k === 'z' && ! e.shiftKey ) { e.preventDefault(); this.undo(); }
 			else if ( k === 'y' || ( k === 'z' && e.shiftKey ) ) { e.preventDefault(); this.redo(); }
 		else if ( ( k === 'd' || k === 'c' || k === 'v' ) && document.body.classList.contains( 'fw-le-nav-open' ) && this.selectedId ) {
@@ -3330,6 +3462,625 @@
 		}
 		},
 
+		/* ---- command palette (Ctrl / Cmd + K) -------------------------- *
+		 * A quick launcher: fuzzy-search every toolbar action AND every element on
+		 * the page, then run / jump with the keyboard. Lives in the shell (it has the
+		 * item index + the actions). Esc or click-away closes it. */
+		toggleCommandPalette: function () {
+			if ( this.$.cmdk ) { this.closeCommandPalette(); } else { this.openCommandPalette(); }
+		},
+
+		/** Select + scroll to an item on the canvas (a palette "element" result). */
+		jumpToItem: function ( id ) {
+			if ( ! this.index[ id ] ) { return; }
+			this.toFrame( 'select-item', { id: id, scroll: true } );
+			this.onSelect( { id: id } );
+		},
+
+		/** The command list: toolbar actions first, then a jump for every element. */
+		cmdkCommands: function () {
+			var self = this, cmds = [];
+			function act( label, hint, run, keywords ) {
+				cmds.push( { kind: 'action', label: label, hint: hint || '', run: run, key: ( label + ' ' + ( keywords || '' ) ).toLowerCase() } );
+			}
+			act( 'Save', 'Ctrl+S', function () { self.onSave(); } );
+			act( 'Undo', 'Ctrl+Z', function () { self.undo(); } );
+			act( 'Redo', 'Ctrl+Y', function () { self.redo(); } );
+			act( 'Add element', '', function () { if ( self.$.addBtn && ! $( 'body' ).hasClass( 'fw-le-panel-open' ) ) { self.$.addBtn.trigger( 'click' ); } }, 'insert widget block' );
+			act( 'Add section', '', function () { self.openStructurePicker(); }, 'row layout structure' );
+			act( 'Structure panel', '', function () { if ( self.$.navBtn && ! $( 'body' ).hasClass( 'fw-le-nav-open' ) ) { self.$.navBtn.trigger( 'click' ); } }, 'navigator tree outline' );
+			if ( self.$.tplBtn ) { act( 'Templates', '', function () { if ( ! $( 'body' ).hasClass( 'fw-le-tpl-open' ) ) { self.$.tplBtn.trigger( 'click' ); } }, 'reusable saved' ); }
+			if ( self.$.histBtn ) { act( 'History', '', function () { if ( ! $( 'body' ).hasClass( 'fw-le-history-open' ) ) { self.$.histBtn.trigger( 'click' ); } }, 'revisions versions restore' ); }
+			act( 'Preview', '', function () { self.onPreview(); }, 'view' );
+			act( 'Open in backend builder', '', function () { self.onBackend(); }, 'edit backend classic' );
+			act( 'Device: Desktop', '', function () { self.setDevice( 'desktop' ); }, 'responsive' );
+			act( 'Device: Tablet', '', function () { self.setDevice( 'tablet' ); }, 'responsive' );
+			act( 'Device: Mobile', '', function () { self.setDevice( 'mobile' ); }, 'responsive phone' );
+			act( 'Toggle wireframe', '', function () { self.toggleWireframe(); }, 'outline structure x-ray skeleton' );
+			act( 'Toggle box model', '', function () { self.toggleBoxModel(); }, 'margin padding devtools inspect spacing' );
+			act( 'Find & replace text', '', function () { self.openFindReplace(); }, 'search swap change copy' );
+			act( 'Edit spacing of selection', '', function () { self.openSpacingEditor(); }, 'margin padding quick style' );
+			act( 'Move selection up', '', function () { self.nudgeItem( -1 ); }, 'reorder nudge alt arrow' );
+			act( 'Move selection down', '', function () { self.nudgeItem( 1 ); }, 'reorder nudge alt arrow' );
+			act( 'Distraction-free mode', '', function () { self.toggleZen(); }, 'zen focus fullscreen hide panels' );
+			act( 'Copy element as JSON', '', function () { self.copyElementJson(); }, 'export clipboard snippet' );
+			act( 'Paste element from JSON', '', function () { self.openPasteJson(); }, 'import insert snippet' );
+			act( 'Check contrast of selection', '', function () { if ( self.selectedId ) { self.toFrame( 'contrast', { id: self.selectedId } ); } else { notify( 'Select a text element first.', 'warning' ); } }, 'accessibility a11y wcag color' );
+			act( 'Add / edit note on selection', '', function () { self.openNote(); }, 'comment annotation review handoff' );
+			act( 'Zoom in', '', function () { self.zoomBy( 1 ); }, 'canvas scale' );
+			act( 'Zoom out', '', function () { self.zoomBy( -1 ); }, 'canvas scale' );
+			act( 'Reset zoom', '', function () { self.resetZoom(); }, 'canvas scale 100' );
+			act( 'Fit to width', '', function () { self.fitZoom(); }, 'canvas scale zoom' );
+			act( 'Page check', '', function () { self.openPageCheck(); }, 'audit lint issues accessibility links' );
+			if ( cfg.settingsUrl ) {
+				act( 'Theme colours & fonts', '', function () {
+					window.open( cfg.settingsUrl + ( cfg.settingsUrl.indexOf( '?' ) > -1 ? '&' : '?' ) + 'fw-open-tab=general_settings_container,tab_base', '_blank', 'noopener' );
+				}, 'global palette design typography brand recolor colors' );
+			}
+			act( 'Keyboard shortcuts', '?', function () { self.openShortcuts(); }, 'help keys cheatsheet' );
+			if ( window.upwAiAssistant && typeof window.upwAiAssistant.openForElement === 'function' ) {
+				act( 'Ask AI about the selection\u2026', '', function () { self.askAiAboutItem( self.selectedId ); }, 'assistant chat improve' );
+			}
+			act( 'Exit editor', '', function () { self.onExit(); }, 'close leave' );
+
+			var seen = 0;
+			for ( var id in this.index ) {
+				if ( ! this.index.hasOwnProperty( id ) ) { continue; }
+				var node = this.index[ id ].node;
+				if ( ! node ) { continue; }
+				var chain = [], cur = id, guard = 0;
+				while ( cur && this.index[ cur ] && guard++ < 30 ) { chain.unshift( labelFor( this.index[ cur ].node ) ); cur = this.index[ cur ].parentId; }
+				var path = chain.slice( 0, -1 ).join( ' \u203a ' );
+				cmds.push( {
+					kind: 'element', id: id, label: labelFor( node ), hint: path,
+					run: ( function ( eid ) { return function () { self.jumpToItem( eid ); }; }( id ) ),
+					key: ( labelFor( node ) + ' ' + path + ' ' + tagFor( node ) ).toLowerCase()
+				} );
+				if ( ++seen > 500 ) { break; }
+			}
+			return cmds;
+		},
+
+		openCommandPalette: function () {
+			if ( this.$.cmdk ) { return; }
+			var self = this;
+			var all = this.cmdkCommands();
+			var $bg = this.$.cmdk = $(
+				'<div class="fw-le-cmdk-backdrop">' +
+					'<div class="fw-le-cmdk" role="dialog" aria-modal="true">' +
+						'<input type="text" class="fw-le-cmdk__input" placeholder="Type a command, or search elements\u2026" aria-label="Command palette" />' +
+						'<div class="fw-le-cmdk__list" role="listbox"></div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+			var $input = $bg.find( '.fw-le-cmdk__input' );
+			var $list = $bg.find( '.fw-le-cmdk__list' );
+			var active = 0, shown = [];
+
+			function score( c, q ) {
+				if ( ! q ) { return c.kind === 'action' ? 2 : 1; }
+				var key = c.key, i = key.indexOf( q );
+				if ( i === 0 ) { return 100; }
+				if ( i > 0 ) { return 60; }
+				var qi = 0;
+				for ( var k = 0; k < key.length && qi < q.length; k++ ) { if ( key.charAt( k ) === q.charAt( qi ) ) { qi++; } }
+				return qi === q.length ? 20 : -1;
+			}
+			function render() {
+				var q = $.trim( $input.val() ).toLowerCase();
+				shown = all.map( function ( c ) { return { c: c, s: score( c, q ) }; } )
+					.filter( function ( x ) { return x.s >= 0; } )
+					.sort( function ( a, b ) { return b.s - a.s; } )
+					.slice( 0, 60 ).map( function ( x ) { return x.c; } );
+				if ( active >= shown.length ) { active = 0; }
+				var html = '';
+				shown.forEach( function ( c, i ) {
+					html += '<div class="fw-le-cmdk__item' + ( i === active ? ' is-active' : '' ) + '" data-i="' + i + '" role="option">' +
+						'<span class="fw-le-cmdk__kind fw-le-cmdk__kind--' + c.kind + '">' + ( c.kind === 'element' ? '\u25c6' : '\u26a1' ) + '</span>' +
+						'<span class="fw-le-cmdk__label">' + escHtml( c.label ) + '</span>' +
+						( c.hint ? '<span class="fw-le-cmdk__hint">' + escHtml( c.hint ) + '</span>' : '' ) +
+					'</div>';
+				} );
+				$list.html( html || '<div class="fw-le-cmdk__empty">No matches</div>' );
+				var a = $list.find( '.is-active' )[ 0 ];
+				if ( a && a.scrollIntoView ) { a.scrollIntoView( { block: 'nearest' } ); }
+			}
+			function run( i ) {
+				var c = shown[ i ];
+				if ( ! c ) { return; }
+				self.closeCommandPalette();
+				try { c.run(); } catch ( e ) { window.console && console.error( '[fw-le-shell] cmdk', e ); }
+			}
+			$input.on( 'input', function () { active = 0; render(); } );
+			$input.on( 'keydown', function ( e ) {
+				if ( e.key === 'ArrowDown' ) { e.preventDefault(); active = Math.min( active + 1, shown.length - 1 ); render(); }
+				else if ( e.key === 'ArrowUp' ) { e.preventDefault(); active = Math.max( active - 1, 0 ); render(); }
+				else if ( e.key === 'Enter' ) { e.preventDefault(); run( active ); }
+				else if ( e.key === 'Escape' ) { e.preventDefault(); self.closeCommandPalette(); }
+			} );
+			$list.on( 'mousemove', '.fw-le-cmdk__item', function () {
+				active = + $( this ).attr( 'data-i' );
+				$list.find( '.is-active' ).removeClass( 'is-active' );
+				$( this ).addClass( 'is-active' );
+			} );
+			$list.on( 'click', '.fw-le-cmdk__item', function () { run( + $( this ).attr( 'data-i' ) ); } );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closeCommandPalette(); } } );
+			render();
+			$input.trigger( 'focus' );
+		},
+
+		closeCommandPalette: function () {
+			if ( this.$.cmdk ) { this.$.cmdk.remove(); this.$.cmdk = null; }
+		},
+		/* ---- wireframe (structural x-ray) ------------------------------ */
+		toggleWireframe: function () {
+			this.wireframeOn = ! this.wireframeOn;
+			this.toFrame( 'toggle-wireframe', { on: this.wireframeOn } );
+		},
+
+		/* ---- box-model visualiser -------------------------------------- */
+		toggleBoxModel: function () {
+			this.boxModelOn = ! this.boxModelOn;
+			this.toFrame( 'toggle-boxmodel', { on: this.boxModelOn } );
+			this.setStatus( 'ready', this.boxModelOn ? 'Box model: hover elements' : 'Box model off' );
+		},
+
+		/* ---- keyboard shortcuts cheatsheet ----------------------------- */
+		toggleShortcuts: function () {
+			if ( this.$.help ) { this.closeShortcuts(); } else { this.openShortcuts(); }
+		},
+		openShortcuts: function () {
+			if ( this.$.help ) { return; }
+			var self = this;
+			var mod = ( navigator.platform && /mac/i.test( navigator.platform ) ) ? '\u2318' : 'Ctrl';
+			var rows = [
+				[ mod + ' K', 'Command palette' ],
+				[ mod + ' S', 'Save' ],
+				[ mod + ' Z', 'Undo' ],
+				[ mod + ' Y', 'Redo' ],
+				[ mod + ' D', 'Duplicate selected (Structure panel)' ],
+				[ mod + ' C / ' + mod + ' V', 'Copy / Paste selected (Structure panel)' ],
+				[ 'Del', 'Delete selected (Structure panel)' ],
+				[ '\u2191 \u2193', 'Move through the Structure tree' ],
+				[ 'Alt \u2191 / \u2193', 'Move the selected element up / down' ],
+				[ 'Double-click', 'Edit text inline / rename a section' ],
+				[ 'Right-click', 'Element actions menu' ],
+				[ '?', 'This help' ],
+				[ 'Esc', 'Close a panel or dialog' ]
+			];
+			var body = rows.map( function ( r ) {
+				return '<div class="fw-le-help__row"><kbd>' + escHtml( r[ 0 ] ) + '</kbd><span>' + escHtml( r[ 1 ] ) + '</span></div>';
+			} ).join( '' );
+			var $bg = this.$.help = $(
+				'<div class="fw-le-help-backdrop">' +
+					'<div class="fw-le-help" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-help__head"><strong>Keyboard shortcuts</strong>' +
+							'<button type="button" class="fw-le-help__close" aria-label="Close">&times;</button></div>' +
+						'<div class="fw-le-help__body">' + body + '</div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closeShortcuts(); } } );
+			$bg.find( '.fw-le-help__close' ).on( 'click', function () { self.closeShortcuts(); } );
+			this._helpEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closeShortcuts(); } };
+			document.addEventListener( 'keydown', this._helpEsc, true );
+		},
+		closeShortcuts: function () {
+			if ( this.$.help ) { this.$.help.remove(); this.$.help = null; }
+			if ( this._helpEsc ) { document.removeEventListener( 'keydown', this._helpEsc, true ); this._helpEsc = null; }
+		},
+		/* ---- find & replace (text content across the page) ------------- */
+
+		/** Content-text att keys for a tag (text / textarea / wp-editor), cached. */
+		contentKeysForTag: function ( tag, cb ) {
+			this._contentKeys = this._contentKeys || {};
+			if ( this._contentKeys[ tag ] ) { cb( this._contentKeys[ tag ] ); return; }
+			var self = this;
+			this.fetchOptions( tag, function ( options ) {
+				var types = optionLeafTypes( options );
+				self._contentKeys[ tag ] = Object.keys( types ).filter( function ( k ) { return isContentTextKey( k, types[ k ] ); } );
+				cb( self._contentKeys[ tag ] );
+			} );
+		},
+
+		/** Resolve content keys for every tag on the page, then run `done`. */
+		prepFindReplace: function ( done ) {
+			var self = this, tags = {};
+			Object.keys( this.index ).forEach( function ( id ) {
+				var n = self.index[ id ].node; if ( n ) { tags[ tagFor( n ) ] = 1; }
+			} );
+			var list = Object.keys( tags ), left = list.length;
+			if ( ! left ) { done(); return; }
+			list.forEach( function ( t ) { self.contentKeysForTag( t, function () { if ( --left === 0 ) { done(); } } ); } );
+		},
+
+		/** Count occurrences of `find` in every content-text att; when `replace` is a
+		 *  string, apply them too. Returns the match count. Literal (regex-escaped). */
+		scanFindReplace: function ( find, replace, caseSensitive ) {
+			if ( ! find ) { return 0; }
+			var self = this, total = 0, doReplace = ( typeof replace === 'string' );
+			var re = new RegExp( find.replace( /[.*+?^${}()|[\]\\]/g, '\\$&' ), caseSensitive ? 'g' : 'gi' );
+			Object.keys( this.index ).forEach( function ( id ) {
+				var node = self.index[ id ].node; if ( ! node || ! node.atts ) { return; }
+				var keys = ( self._contentKeys && self._contentKeys[ tagFor( node ) ] ) || [];
+				keys.forEach( function ( k ) {
+					var v = node.atts[ k ];
+					if ( typeof v !== 'string' || ! v ) { return; }
+					var m = v.match( re );
+					if ( ! m ) { return; }
+					total += m.length;
+					if ( doReplace ) { node.atts[ k ] = v.replace( re, replace ); }
+				} );
+			} );
+			return total;
+		},
+
+		openFindReplace: function () {
+			if ( this.$.fr ) { return; }
+			var self = this;
+			var $bg = this.$.fr = $(
+				'<div class="fw-le-fr-backdrop">' +
+					'<div class="fw-le-fr" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-fr__head"><strong>Find &amp; replace text</strong>' +
+							'<button type="button" class="fw-le-fr__close" aria-label="Close">&times;</button></div>' +
+						'<div class="fw-le-fr__body">' +
+							'<input type="text" class="fw-le-fr__find" placeholder="Find\u2026" aria-label="Find" />' +
+							'<input type="text" class="fw-le-fr__replace" placeholder="Replace with\u2026" aria-label="Replace with" />' +
+							'<label class="fw-le-fr__opt"><input type="checkbox" class="fw-le-fr__case" /> Match case</label>' +
+							'<div class="fw-le-fr__foot"><span class="fw-le-fr__count"></span>' +
+								'<button type="button" class="fw-le-fr__apply" disabled>Replace all</button></div>' +
+						'</div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+			var $find = $bg.find( '.fw-le-fr__find' ), $rep = $bg.find( '.fw-le-fr__replace' ),
+				$case = $bg.find( '.fw-le-fr__case' ), $count = $bg.find( '.fw-le-fr__count' ), $apply = $bg.find( '.fw-le-fr__apply' );
+			var ready = false;
+			$count.text( 'Scanning page\u2026' );
+			this.prepFindReplace( function () { ready = true; recount(); } );
+			function recount() {
+				if ( ! ready ) { return; }
+				var fnd = $find.val();
+				if ( ! fnd ) { $count.text( '' ); $apply.prop( 'disabled', true ); return; }
+				var n = self.scanFindReplace( fnd, null, $case.prop( 'checked' ) );
+				$count.text( n ? ( n + ' match' + ( n === 1 ? '' : 'es' ) ) : 'No matches' );
+				$apply.prop( 'disabled', ! n );
+			}
+			$find.on( 'input', recount );
+			$case.on( 'change', recount );
+			$apply.on( 'click', function () {
+				var fnd = $find.val(); if ( ! fnd ) { return; }
+				self.recordHistory();
+				var n = self.scanFindReplace( fnd, String( $rep.val() ), $case.prop( 'checked' ) );
+				if ( n ) { self.markDirty(); self.syncFrameModel(); self.renderPageToCanvas(); self.refreshNavigator(); }
+				$count.text( n + ' replaced' );
+				$apply.prop( 'disabled', true );
+				window.setTimeout( function () { self.closeFindReplace(); }, 800 );
+			} );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closeFindReplace(); } } );
+			$bg.find( '.fw-le-fr__close' ).on( 'click', function () { self.closeFindReplace(); } );
+			this._frEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closeFindReplace(); } };
+			document.addEventListener( 'keydown', this._frEsc, true );
+			$find.trigger( 'focus' );
+		},
+		closeFindReplace: function () {
+			if ( this.$.fr ) { this.$.fr.remove(); this.$.fr = null; }
+			if ( this._frEsc ) { document.removeEventListener( 'keydown', this._frEsc, true ); this._frEsc = null; }
+		},
+		/** A global shortcut the frame forwarded (focus was inside the iframe). */
+		handleForwardedShortcut: function ( p ) {
+			if ( ! p ) { return; }
+			switch ( p.key ) {
+				case 'k': this.toggleCommandPalette(); break;
+				case 's': this.onSave(); break;
+				case 'z': if ( p.shift ) { this.redo(); } else { this.undo(); } break;
+				case 'y': this.redo(); break;
+				case '?': if ( ! this.$.cmdk ) { this.toggleShortcuts(); } break;
+				case 'nudge-up': this.nudgeItem( -1 ); break;
+				case 'nudge-down': this.nudgeItem( 1 ); break;
+			}
+		},
+
+		/* ---- canvas zoom ----------------------------------------------- */
+		buildZoomControl: function () {
+			var self = this;
+			this.zoom = 1;
+			var $z = this.$.zoom = $(
+				'<div class="fw-le-zoom" role="group" aria-label="Zoom">' +
+					'<button type="button" class="fw-le-zoom__btn fw-le-zoom__out" title="Zoom out" aria-label="Zoom out">\u2212</button>' +
+					'<button type="button" class="fw-le-zoom__level" title="Reset zoom">100%</button>' +
+					'<button type="button" class="fw-le-zoom__btn fw-le-zoom__in" title="Zoom in" aria-label="Zoom in">+</button>' +
+				'</div>'
+			);
+			var $devices = $( '#fw-le-devices' );
+			if ( $devices.length ) { $z.insertAfter( $devices ); } else { $z.appendTo( '#fw-le-toolbar' ); }
+			$z.find( '.fw-le-zoom__out' ).on( 'click', function () { self.zoomBy( -1 ); } );
+			$z.find( '.fw-le-zoom__in' ).on( 'click', function () { self.zoomBy( 1 ); } );
+			$z.find( '.fw-le-zoom__level' ).on( 'click', function () { self.setZoom( 1 ); } );
+		},
+
+		_zoomSteps: [ 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.1, 1.25, 1.5 ],
+
+		/** Scale the canvas via CSS `zoom` (Chromium keeps hit-testing correct, so
+		 *  selection + drag still work through the scale). */
+		setZoom: function ( z ) {
+			z = Math.max( 0.25, Math.min( 1.5, z ) );
+			this.zoom = z;
+			if ( this.$.frame && this.$.frame.length ) { this.$.frame.css( 'zoom', z ); }
+			if ( this.$.zoom ) { this.$.zoom.find( '.fw-le-zoom__level' ).text( Math.round( z * 100 ) + '%' ); }
+		},
+		zoomBy: function ( dir ) {
+			var steps = this._zoomSteps, cur = this.zoom || 1, i = 0;
+			for ( var s = 0; s < steps.length; s++ ) { if ( Math.abs( steps[ s ] - cur ) < Math.abs( steps[ i ] - cur ) ) { i = s; } }
+			i = Math.max( 0, Math.min( steps.length - 1, i + ( dir > 0 ? 1 : -1 ) ) );
+			this.setZoom( steps[ i ] );
+		},
+		resetZoom: function () { this.setZoom( 1 ); },
+		fitZoom: function () {
+			var canvas = document.getElementById( 'fw-le-canvas' ), frame = this.$.frame && this.$.frame[ 0 ];
+			if ( ! canvas || ! frame ) { return; }
+			frame.style.zoom = 1;
+			var natural = frame.offsetWidth, avail = canvas.clientWidth - 32;
+			this.setZoom( natural > 0 ? Math.min( 1, avail / natural ) : 1 );
+		},
+		/* ---- page check (lightweight, self-contained lint) ------------- */
+
+		/** Scan the model for common issues: placeholder "#" links and content
+		 *  elements left with no visible text. Returns [{ id, label, path, msg }]. */
+		scanPageIssues: function () {
+			var self = this, issues = [];
+			Object.keys( this.index ).forEach( function ( id ) {
+				var node = self.index[ id ].node; if ( ! node || ! node.atts ) { return; }
+				var atts = node.atts, tag = tagFor( node );
+				var chain = [], cur = id, g = 0;
+				while ( cur && self.index[ cur ] && g++ < 30 ) { chain.unshift( labelFor( self.index[ cur ].node ) ); cur = self.index[ cur ].parentId; }
+				var entry = { id: id, label: labelFor( node ), path: chain.slice( 0, -1 ).join( ' \u203a ' ) };
+				function add( msg ) { issues.push( { id: entry.id, label: entry.label, path: entry.path, msg: msg } ); }
+				[ 'link', 'url', 'href' ].forEach( function ( k ) {
+					var v = atts[ k ];
+					if ( typeof v === 'string' && v.trim() === '#' ) { add( 'Links to # (placeholder)' ); }
+				} );
+				var ck = ( self._contentKeys && self._contentKeys[ tag ] ) || [];
+				if ( ck.length && TEXT_PRIMARY[ tag ] ) {
+					var hasText = ck.some( function ( k ) {
+						var v = atts[ k ];
+						return typeof v === 'string' && v.replace( /<[^>]*>/g, '' ).trim() !== '';
+					} );
+					if ( ! hasText ) { add( 'No text set' ); }
+				}
+			} );
+			return issues;
+		},
+
+		openPageCheck: function () {
+			if ( this.$.pc ) { return; }
+			var self = this;
+			var $bg = this.$.pc = $(
+				'<div class="fw-le-pc-backdrop">' +
+					'<div class="fw-le-pc" role="dialog" aria-modal="true">' +
+						'<div class="fw-le-pc__head"><strong>Page check</strong>' +
+							'<button type="button" class="fw-le-pc__close" aria-label="Close">&times;</button></div>' +
+						'<div class="fw-le-pc__body"><div class="fw-le-pc__ok">Scanning\u2026</div></div>' +
+					'</div>' +
+				'</div>'
+			).appendTo( 'body' );
+			var $body = $bg.find( '.fw-le-pc__body' );
+			this.prepFindReplace( function () {
+				var issues = self.scanPageIssues();
+				if ( ! issues.length ) { $body.html( '<div class="fw-le-pc__ok">\u2713 No issues found</div>' ); return; }
+				var html = issues.map( function ( it ) {
+					return '<div class="fw-le-pc__row" data-id="' + escHtml( it.id ) + '">' +
+						'<span class="fw-le-pc__msg">' + escHtml( it.msg ) + '</span>' +
+						'<span class="fw-le-pc__where"><b>' + escHtml( it.label ) + '</b>' + ( it.path ? ' \u00b7 ' + escHtml( it.path ) : '' ) + '</span>' +
+					'</div>';
+				} ).join( '' );
+				$body.html( html );
+			} );
+			$body.on( 'click', '.fw-le-pc__row', function () {
+				var id = $( this ).attr( 'data-id' );
+				self.closePageCheck();
+				self.jumpToItem( id );
+			} );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closePageCheck(); } } );
+			$bg.find( '.fw-le-pc__close' ).on( 'click', function () { self.closePageCheck(); } );
+			this._pcEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closePageCheck(); } };
+			document.addEventListener( 'keydown', this._pcEsc, true );
+		},
+		closePageCheck: function () {
+			if ( this.$.pc ) { this.$.pc.remove(); this.$.pc = null; }
+			if ( this._pcEsc ) { document.removeEventListener( 'keydown', this._pcEsc, true ); this._pcEsc = null; }
+		},
+		/* ---- quick spacing editor (margin / padding popover) ----------- */
+		openSpacingEditor: function ( id ) {
+			id = id || this.selectedId;
+			var node = id && this.nodeOf( id );
+			if ( ! node ) { notify( 'Select an element first.', 'warning' ); return; }
+			if ( this.$.sp ) { this.closeSpacingEditor(); }
+			var self = this;
+			if ( ! node.atts ) { node.atts = {}; }
+			var sp = node.atts.spacing;
+			if ( ! sp || typeof sp !== 'object' ) { sp = { margin: {}, padding: {} }; }
+			sp.margin = sp.margin || {}; sp.padding = sp.padding || {};
+			function inp( group, side ) {
+				return '<input type="text" class="fw-le-sp__in" data-g="' + group + '" data-s="' + side + '" value="' + escHtml( sp[ group ][ side ] || '' ) + '" placeholder="' + side.charAt( 0 ).toUpperCase() + '" aria-label="' + group + ' ' + side + '" />';
+			}
+			function rowHtml( group, label ) {
+				return '<div class="fw-le-sp__row"><span class="fw-le-sp__lbl">' + label + '</span>' +
+					inp( group, 'top' ) + inp( group, 'right' ) + inp( group, 'bottom' ) + inp( group, 'left' ) + '</div>';
+			}
+			var $bg = this.$.sp = $(
+				'<div class="fw-le-sp-backdrop"><div class="fw-le-sp" role="dialog" aria-modal="true">' +
+					'<div class="fw-le-sp__head"><strong>Spacing \u00b7 ' + escHtml( labelFor( node ) ) + '</strong>' +
+						'<button type="button" class="fw-le-sp__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-sp__body">' +
+						'<div class="fw-le-sp__hint">Top \u00b7 Right \u00b7 Bottom \u00b7 Left \u2014 e.g. 20px, 1rem</div>' +
+						rowHtml( 'margin', 'Margin' ) + rowHtml( 'padding', 'Padding' ) +
+					'</div>' +
+				'</div></div>'
+			).appendTo( 'body' );
+			var timer = null, pre = this.snapshot(), rec = false;
+			$bg.on( 'input', '.fw-le-sp__in', function () {
+				if ( ! rec ) { self.recordHistory( pre ); rec = true; }
+				sp[ this.getAttribute( 'data-g' ) ][ this.getAttribute( 'data-s' ) ] = this.value;
+				node.atts.spacing = sp;
+				self.markDirty();
+				clearTimeout( timer );
+				timer = setTimeout( function () { self.syncFrameModel(); self.renderItem( id ); }, 300 );
+			} );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closeSpacingEditor(); } } );
+			$bg.find( '.fw-le-sp__close' ).on( 'click', function () { self.closeSpacingEditor(); } );
+			this._spEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closeSpacingEditor(); } };
+			document.addEventListener( 'keydown', this._spEsc, true );
+			$bg.find( '.fw-le-sp__in' ).first().trigger( 'focus' );
+		},
+		closeSpacingEditor: function () {
+			if ( this.$.sp ) { this.$.sp.remove(); this.$.sp = null; }
+			if ( this._spEsc ) { document.removeEventListener( 'keydown', this._spEsc, true ); this._spEsc = null; }
+		},
+		/** Show a contrast-check result (from the frame) as a toast. */
+		showContrastResult: function ( r ) {
+			if ( ! r || r.error ) { notify( 'Select a text element first.', 'warning' ); return; }
+			var verdict = r.aa ? 'passes AA' : ( r.aaLarge ? 'passes AA for large text only' : 'fails AA' );
+			notify( 'Contrast ' + r.ratio + ':1 — ' + verdict + '  (text ' + r.fg + ' on ' + r.bg + ')', r.aa ? 'success' : 'warning' );
+		},
+
+		/* ---- element notes (saved with the page in atts._le_note) ------ */
+		openNote: function ( id ) {
+			id = id || this.selectedId;
+			var node = id && this.nodeOf( id );
+			if ( ! node ) { notify( 'Select an element first.', 'warning' ); return; }
+			if ( this.$.note ) { this.closeNote(); }
+			var self = this;
+			var $bg = this.$.note = $(
+				'<div class="fw-le-note-backdrop"><div class="fw-le-note" role="dialog" aria-modal="true">' +
+					'<div class="fw-le-note__head"><strong>Note · ' + escHtml( labelFor( node ) ) + '</strong>' +
+						'<button type="button" class="fw-le-note__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-note__body">' +
+						'<textarea class="fw-le-note__ta" rows="4" placeholder="A note for reviewers / handoff…"></textarea>' +
+						'<div class="fw-le-note__foot"><span class="fw-le-note__hint">Saved with the page.</span>' +
+							'<button type="button" class="fw-le-note__save">Save note</button></div>' +
+					'</div></div></div>'
+			).appendTo( 'body' );
+			$bg.find( '.fw-le-note__ta' ).val( ( node.atts && node.atts._le_note ) || '' );
+			$bg.find( '.fw-le-note__save' ).on( 'click', function () {
+				var v = $.trim( $bg.find( '.fw-le-note__ta' ).val() );
+				if ( ! node.atts ) { node.atts = {}; }
+				self.recordHistory();
+				if ( v ) { node.atts._le_note = v; } else { delete node.atts._le_note; }
+				self.markDirty(); self.syncFrameModel(); self.refreshNavigator();
+				self.closeNote();
+			} );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closeNote(); } } );
+			$bg.find( '.fw-le-note__close' ).on( 'click', function () { self.closeNote(); } );
+			this._noteEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closeNote(); } };
+			document.addEventListener( 'keydown', this._noteEsc, true );
+			$bg.find( '.fw-le-note__ta' ).trigger( 'focus' );
+		},
+		closeNote: function () {
+			if ( this.$.note ) { this.$.note.remove(); this.$.note = null; }
+			if ( this._noteEsc ) { document.removeEventListener( 'keydown', this._noteEsc, true ); this._noteEsc = null; }
+		},
+
+		/* ---- nudge reorder (Alt + up/down) ----------------------------- */
+		nudgeItem: function ( dir ) {
+			var id = this.selectedId, entry = id && this.index[ id ];
+			if ( ! entry ) { return; }
+			var arr = entry.siblings, parentId = entry.parentId;
+			var i = arr.indexOf( entry.node ), j = i + ( dir < 0 ? -1 : 1 );
+			if ( i < 0 || j < 0 || j >= arr.length ) { return; }
+			this.recordHistory();
+			arr.splice( j, 0, arr.splice( i, 1 )[ 0 ] );
+			this.rebuildIndex(); this.markDirty(); this.syncFrameModel();
+			if ( parentId && this.index[ parentId ] ) { this.renderItem( parentId ); } else { this.renderPageToCanvas(); }
+			this.refreshNavigator();
+			this.toFrame( 'select-item', { id: id, scroll: true } );
+		},
+
+		/* ---- distraction-free mode ------------------------------------- */
+		toggleZen: function () {
+			var on = ! document.body.classList.contains( 'fw-le-zen' );
+			document.body.classList.toggle( 'fw-le-zen', on );
+			if ( on && ! this.$.zenExit ) {
+				var self = this;
+				this.$.zenExit = $( '<button type="button" class="fw-le-zen-exit">Exit distraction-free \u00b7 Esc</button>' ).appendTo( 'body' );
+				this.$.zenExit.on( 'click', function () { self.toggleZen(); } );
+			} else if ( ! on && this.$.zenExit ) {
+				this.$.zenExit.remove(); this.$.zenExit = null;
+			}
+		},
+
+		/* ---- copy / paste element as JSON ------------------------------ */
+		copyElementJson: function ( id ) {
+			var node = this.nodeOf( id || this.selectedId );
+			if ( ! node ) { notify( 'Select an element first.', 'warning' ); return; }
+			var json = JSON.stringify( node );
+			var self = this;
+			function done() { self.setStatus( 'ready', 'Copied JSON' ); }
+			if ( navigator.clipboard && navigator.clipboard.writeText ) {
+				navigator.clipboard.writeText( json ).then( done, function () { self.copyJsonFallback( json ); } );
+			} else { this.copyJsonFallback( json ); }
+		},
+		copyJsonFallback: function ( text ) {
+			var ta = document.createElement( 'textarea' );
+			ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+			document.body.appendChild( ta ); ta.select();
+			try { document.execCommand( 'copy' ); this.setStatus( 'ready', 'Copied JSON' ); } catch ( e ) {}
+			document.body.removeChild( ta );
+		},
+		openPasteJson: function () {
+			if ( this.$.pj ) { return; }
+			var self = this;
+			var $bg = this.$.pj = $(
+				'<div class="fw-le-pj-backdrop"><div class="fw-le-pj" role="dialog" aria-modal="true">' +
+					'<div class="fw-le-pj__head"><strong>Paste element JSON</strong>' +
+						'<button type="button" class="fw-le-pj__close" aria-label="Close">&times;</button></div>' +
+					'<div class="fw-le-pj__body">' +
+						'<textarea class="fw-le-pj__ta" rows="7" placeholder="Paste an element\u2019s JSON here\u2026" aria-label="Element JSON"></textarea>' +
+						'<div class="fw-le-pj__foot"><span class="fw-le-pj__msg"></span>' +
+							'<button type="button" class="fw-le-pj__insert">Insert</button></div>' +
+					'</div></div></div>'
+			).appendTo( 'body' );
+			$bg.find( '.fw-le-pj__insert' ).on( 'click', function () {
+				var text = $.trim( $bg.find( '.fw-le-pj__ta' ).val() );
+				if ( ! text ) { return; }
+				var node;
+				try { node = JSON.parse( text ); } catch ( e ) { $bg.find( '.fw-le-pj__msg' ).text( 'Not valid JSON.' ); return; }
+				if ( ! node || typeof node !== 'object' || ! ( node.type || node.shortcode ) ) { $bg.find( '.fw-le-pj__msg' ).text( 'That is not an element.' ); return; }
+				self.closePasteJson();
+				self.insertJsonNode( node );
+			} );
+			$bg.on( 'mousedown', function ( e ) { if ( e.target === $bg[ 0 ] ) { self.closePasteJson(); } } );
+			$bg.find( '.fw-le-pj__close' ).on( 'click', function () { self.closePasteJson(); } );
+			this._pjEsc = function ( e ) { if ( e.key === 'Escape' ) { self.closePasteJson(); } };
+			document.addEventListener( 'keydown', this._pjEsc, true );
+			$bg.find( '.fw-le-pj__ta' ).trigger( 'focus' );
+		},
+		closePasteJson: function () {
+			if ( this.$.pj ) { this.$.pj.remove(); this.$.pj = null; }
+			if ( this._pjEsc ) { document.removeEventListener( 'keydown', this._pjEsc, true ); this._pjEsc = null; }
+		},
+
+		/** Insert a JSON node (fresh ids) right after the selected item — as a
+		 *  sibling in whatever container holds it (column, flexbox, block, or the
+		 *  page root), so it works regardless of the layout model. */
+		insertJsonNode: function ( raw ) {
+			var node = this.cloneWithNewIds( raw );
+			var id = ( node.atts && node.atts.unique_id ) || node.unique_id;
+			var entry = this.selectedId && this.index[ this.selectedId ];
+			this.recordHistory();
+			var parentId = null;
+			if ( entry ) {
+				var arr = entry.siblings, i = arr.indexOf( entry.node );
+				arr.splice( i >= 0 ? i + 1 : arr.length, 0, node );
+				parentId = entry.parentId;
+			} else {
+				this.model.push( node );
+			}
+			this.rebuildIndex(); this.markDirty(); this.syncFrameModel();
+			if ( parentId && this.index[ parentId ] ) { this.renderItem( parentId ); } else { this.renderPageToCanvas(); }
+			this.refreshNavigator();
+			this.toFrame( 'select-item', { id: id, scroll: true } );
+		},
 		markDirty: function () {
 			this.dirty = true;
 			this.$.save.prop( 'disabled', false );

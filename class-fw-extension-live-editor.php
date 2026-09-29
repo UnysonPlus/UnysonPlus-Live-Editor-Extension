@@ -788,6 +788,27 @@ class FW_Extension_Live_Editor extends FW_Extension {
 
 		$builder_data = fw_get_db_post_option( $post->ID, $this->pb()->get_option_key() );
 
+		// Belt-and-braces for the icon picker inside the shell: guarantee
+		// window.fwIconV3 (with a FRESH nonce) exists at boot on the always-loaded
+		// shell script. The picker grid loads via one fw_icon_v3_get_icons request
+		// that reads window.fwIconV3.pickerNonce; if the icon option-type's own
+		// localization doesn't land on this front-end shell before the picker's
+		// boot-time singleton fires, that request goes out with an empty nonce,
+		// admin-ajax replies -1, and the grid stays blank for the whole session.
+		// Defining it here (a valid nonce, same NONCE action the endpoint checks)
+		// closes that gap; if the option type also localizes fwIconV3 later, its
+		// (fuller) object simply wins — both carry a valid pickerNonce.
+		if ( class_exists( 'FW_Icon_Favorites_Manager' ) ) {
+			wp_localize_script( 'fw-live-editor', 'fwIconV3', array(
+				'ajaxUrl'     => admin_url( 'admin-ajax.php' ),
+				'pickerNonce' => wp_create_nonce( FW_Icon_Favorites_Manager::NONCE ),
+				'i18n'        => array(
+					'uploading'    => __( 'Uploading…', 'fw' ),
+					'uploadFailed' => __( 'Upload failed.', 'fw' ),
+				),
+			) );
+		}
+
 		wp_localize_script( 'fw-live-editor', '_fwLiveEditor', array(
 			'postId'   => (int) $post->ID,
 			'version'  => $this->manifest->get_version(),
@@ -797,6 +818,15 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'exitUrl'  => get_permalink( $post->ID ),
 			'editUrl'  => admin_url( 'post.php?post=' . (int) $post->ID . '&action=edit' ),
 			'ajaxUrl'  => admin_url( 'admin-ajax.php' ),
+			// Base Theme Settings URL (for the command palette's "Theme colours &
+			// fonts" deep link). Empty when the user can't edit theme options.
+			'settingsUrl' => current_user_can( 'edit_theme_options' )
+				? admin_url( 'admin.php?page=' . (
+					( function_exists( 'fw' ) && fw()->backend && method_exists( fw()->backend, '_get_settings_page_slug' ) )
+						? fw()->backend->_get_settings_page_slug()
+						: apply_filters( 'fw_get_settings_page_slug', 'fw-settings' )
+				) )
+				: '',
 			'nonce'    => wp_create_nonce( 'fw-live-editor:' . $post->ID ),
 			'actions'  => array(
 				'itemOptions' => 'fw_live_editor_item_options',
