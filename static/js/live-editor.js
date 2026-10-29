@@ -1484,8 +1484,27 @@
 
 		/** Category of a tree node: 'section', 'column', or 'element' (leaf). */
 		_nodeCat: function ( n ) {
+			// A stamped data-cat (set from the MODEL in renderTreeNode) is authoritative —
+			// it's the only way to tell a Section-tag Flexbox (type 'flexbox',
+			// atts.html_tag==='section') apart from a plain Flexbox, since both share the
+			// same data-type. Without it such a root section classifies as 'element' and
+			// gets ZERO drop points at the nav root, so it can't be reordered.
+			var c = n && n.getAttribute && n.getAttribute( 'data-cat' );
+			if ( c ) { return c; }
 			var t = ( n && n.getAttribute && n.getAttribute( 'data-type' ) ) || '';
 			if ( /section$/.test( t ) ) { return 'section'; }
+			if ( t === 'column' ) { return 'column'; }
+			if ( t === 'container' ) { return 'container'; }
+			return 'element';
+		},
+
+		/** Drag/structure category of a MODEL node (html_tag is visible here, unlike the
+		 *  DOM data-type). A Section-tag Flexbox counts as a section — same test
+		 *  lastSectionId() uses — so it reorders among the other sections at the root. */
+		_modelCat: function ( node ) {
+			var t = ( node && node.type ) || '';
+			if ( /section$/.test( t ) ) { return 'section'; }
+			if ( t === 'flexbox' && node.atts && node.atts.html_tag === 'section' ) { return 'section'; }
 			if ( t === 'column' ) { return 'column'; }
 			if ( t === 'container' ) { return 'container'; }
 			return 'element';
@@ -1912,7 +1931,8 @@
 
 			var $node = $( '<div class="fw-le-tree__node"/>' )
 				.attr( 'data-id', id )
-				.attr( 'data-type', node.type || '' );
+				.attr( 'data-type', node.type || '' )
+				.attr( 'data-cat', this._modelCat( node ) );
 			if ( isSection ) { $node.addClass( 'fw-le-tree__node--section' ); }
 			if ( isDefault ) { $node.addClass( 'fw-le-tree__node--default' ).attr( 'data-default', '1' ).attr( 'data-section', node._sectionId ); }
 			if ( this._navCollapsed && this._navCollapsed[ id ] ) { $node.addClass( 'is-collapsed' ); }

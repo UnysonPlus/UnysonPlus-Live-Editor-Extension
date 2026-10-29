@@ -1120,6 +1120,21 @@ body.fw-live-editor-shell .media-modal .media-frame-title h1 {
 	font-weight: 600 !important;
 }
 
+/* Advanced tab — flush the Position control. It's a responsive-wrapped multi-picker,
+ * and the multi-picker wraps BOTH its picker select and each revealed Offset /
+ * Z-Index choice in a full .fw-backend-option. That inner option carries its own
+ * 20px side padding (and an alternating zebra background) ON TOP of the responsive
+ * option's own padding — so the Position select + its choices sit visibly inset from
+ * sibling rows like Overflow, with an inset grey band. Flatten the inner options so
+ * they align flush with the rest of the tab. Lives here (not in the core `responsive`
+ * option-type CSS) so it rides the live editor stylesheet's filemtime cache-bust —
+ * the core file is pinned to the unchanged framework version and would serve stale. */
+body.fw-live-editor-shell .media-frame .fw-option-responsive-panel .fw-option-type-multi-picker .fw-backend-option {
+	padding-left: 0;
+	padding-right: 0;
+	background: transparent;
+}
+
 /* The WordPress media frame (icon picker / media-image fields) is built for
  * wp-admin and doesn't reliably get its fixed-overlay positioning on a front-end
  * document, so it floats off-position. Pin it as a centered overlay above the

@@ -72,6 +72,14 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// and on the wp-admin post-edit screen, so it is registered unconditionally.
 		add_action( 'admin_bar_menu', array( $this, '_action_admin_bar_menu' ), 90 );
 
+		// The Asset Optimizer must stand down while the editor renders. Its UI is
+		// drawn by JavaScript after load, so none of the class names it styles are
+		// in the HTML the unused-CSS purge scans - the purge removes every one of
+		// those rules and the editor comes up as an unstyled stack of links. The
+		// optimizer carries the same two query vars as a built-in default; this
+		// filter keeps the two in step if they are ever renamed here.
+		add_filter( 'fw_ao_skip_request', array( $this, '_filter_asset_optimizer_skip' ) );
+
 		// The Live Editor renders through the THEME on the front end, so the
 		// wp-admin context the options UI assumes is absent. See
 		// _action_editor_admin_context() for what is restored and why.
@@ -998,6 +1006,20 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// base runtime + every shortcode option-type's static assets.
 		if ( function_exists( 'fw_ext_shortcodes_enqueue_shortcodes_admin_scripts' ) ) {
 			fw_ext_shortcodes_enqueue_shortcodes_admin_scripts();
+		}
+
+		// The loader above walks each shortcode's options via fw_collect_options(),
+		// which does NOT descend into a multi-picker's `choices` / a responsive
+		// option's `inner`. The Advanced tab's Position control nests the Offset
+		// field (option type `position-box`) exactly there — the relative/absolute/…
+		// choices of a responsive multi-picker — so its stylesheet is never enqueued
+		// and the four Top/Right/Bottom/Left unit inputs collapse from the intended
+		// flex row to a stacked block. Enqueue it explicitly (its own _enqueue_static
+		// also pulls in the nested unit-input it renders each side with). Guarded so a
+		// trimmed install without the type can't fatal.
+		$position_box = fw()->backend->option_type( 'position-box' );
+		if ( $position_box && method_exists( $position_box, 'enqueue_static' ) ) {
+			$position_box->enqueue_static();
 		}
 
 		// Define `fw.shortcodesLoadData` / `fw.unysonShortcodesData` right after
@@ -2515,6 +2537,18 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		wp_send_json_success( array( 'time' => $time ) );
 	}
 
+
+	/**
+	 * @internal
+	 * Tell the Asset Optimizer to skip combining and purging while the editor is
+	 * on screen. See the filter registration in _init() for why.
+	 *
+	 * @param bool $skip
+	 * @return bool
+	 */
+	public function _filter_asset_optimizer_skip( $skip ) {
+		return $skip || $this->is_editor_request();
+	}
 
 	/**
 	 * Is this request the editor shell or its canvas iframe?
