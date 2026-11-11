@@ -99,6 +99,20 @@ nocache_headers();
 						<span class="dashicons dashicons-smartphone"></span>
 					</button>
 				</div>
+				<?php /* Edit / Preview: Edit keeps the page still so it is easy to select and change; Preview
+				 * plays it exactly as a visitor sees it (every animation, scroll effect and hover), with the
+				 * unsaved changes. */ ?>
+				<div id="fw-le-modes" class="fw-le-devices fw-le-modes" role="group" aria-label="<?php echo esc_attr__( 'Mode', 'fw' ); ?>">
+					<button type="button" class="fw-le-device fw-le-mode is-active" data-mode="edit" aria-pressed="true" title="<?php echo esc_attr__( 'Edit: the page holds still so you can select and change things', 'fw' ); ?>">
+						<span class="dashicons dashicons-edit"></span><span class="fw-le-mode__lbl"><?php echo esc_html__( 'Edit', 'fw' ); ?></span>
+					</button>
+					<button type="button" class="fw-le-device fw-le-mode" data-mode="preview" aria-pressed="false" title="<?php echo esc_attr__( 'Preview: play the page as a visitor sees it (animations, scroll effects, hover), with your unsaved changes', 'fw' ); ?>">
+						<span class="dashicons dashicons-controls-play"></span><span class="fw-le-mode__lbl"><?php echo esc_html__( 'Preview', 'fw' ); ?></span>
+					</button>
+					<button type="button" id="fw-le-play" class="fw-le-device fw-le-mode fw-le-play" disabled title="<?php echo esc_attr__( 'Play the selected element right where it is, as a visitor sees it, with your unsaved changes (select an element first)', 'fw' ); ?>">
+						<span class="dashicons dashicons-video-alt3"></span><span class="fw-le-mode__lbl"><?php echo esc_html__( 'Play', 'fw' ); ?></span>
+					</button>
+				</div>
 			</div>
 
 			<div class="fw-le-toolbar__group fw-le-toolbar__group--right">
@@ -114,7 +128,7 @@ nocache_headers();
 				<button type="button" id="fw-le-backend" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Edit in the backend builder', 'fw' ); ?>">
 					<span class="dashicons dashicons-layout"></span>
 				</button>
-				<button type="button" id="fw-le-preview" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Preview (opens in a new tab)', 'fw' ); ?>">
+				<button type="button" id="fw-le-preview" class="fw-le-btn fw-le-btn--icon fw-le-btn--ghost" title="<?php echo esc_attr__( 'Open the saved page in a new tab', 'fw' ); ?>">
 					<span class="dashicons dashicons-visibility"></span>
 				</button>
 				<button type="button" id="fw-le-exit" class="fw-le-btn fw-le-btn--ghost">
@@ -131,6 +145,7 @@ nocache_headers();
 		<main id="fw-le-canvas" class="fw-le-canvas">
 			<iframe
 				id="fw-le-frame"
+				name="fw-le-frame"
 				class="fw-le-frame"
 				src="<?php echo esc_url( $fw_le_frame_url ); ?>"
 				title="<?php echo esc_attr__( 'Live page canvas', 'fw' ); ?>"></iframe>

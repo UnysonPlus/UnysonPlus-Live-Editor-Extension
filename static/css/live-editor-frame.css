@@ -674,3 +674,12 @@ body.fw-le-wireframe [data-fw-le-wf="el"] {
 	white-space: nowrap;
 	box-shadow: 0 2px 8px rgba( 0, 0, 0, 0.35 );
 }
+
+/* Edit mode holds motion still at its FINAL state: an element waiting for its entrance (or gone after
+   an exit) is shown, so items re-rendered while editing never come back invisible. Preview mode (the
+   Edit / Preview switch) plays the real page instead. */
+.fw-live-editor-frame-active .sc-anim-pending,
+.fw-live-editor-frame-active .sc-anim-gone {
+	opacity: 1 !important;
+	pointer-events: auto !important;
+}

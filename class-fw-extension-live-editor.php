@@ -64,6 +64,14 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	/** Query var that marks the document loaded INSIDE the iframe (the canvas). */
 	private $frame_query_var = 'fw-live-editor-frame';
 
+	/** Query var of the canvas in PREVIEW mode: the page exactly as a visitor sees it (every
+	 *  animation running, no editing chrome), built from the editor's current — possibly unsaved —
+	 *  model, which the shell POSTs (json + nonce) into the iframe. See is_motion_preview_request(). */
+	private $preview_query_var = 'fw-le-motion-preview';
+
+	/** @var array|null|false the posted Preview model (false = checked, not a Preview request) */
+	private $preview_model = null;
+
 	/**
 	 * @internal
 	 */
@@ -130,7 +138,9 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		//    so every item has an element to stamp. sc_needs_wrapper() only consults
 		//    this filter when it would otherwise return false, so styled items are
 		//    unaffected.
-		add_filter( 'sc_needs_wrapper', array( $this, '_filter_force_wrapper' ), 999 );
+		add_filter( 'sc_needs_wrapper', array( $this, '_filter_force_wrapper' ), 999, 2 );
+		// Preview "Play": mark the element being played, so the shell can scroll it into view.
+		add_filter( 'sc_build_wrapper_attr', array( $this, '_filter_mark_preview_focus' ), 999, 2 );
 		// 2. Stamp each rendered wrapper with its builder unique_id. The item's TYPE
 		//    is resolved client-side from the model, so the HTML only needs the id —
 		//    no extra DOM, so the column grid / section layout is intact.
@@ -149,6 +159,13 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// Suppress the WP admin bar inside both the shell and the iframe — the
 			// editor provides its own toolbar and the bar only adds clutter / height.
 			add_filter( 'show_admin_bar', array( $this, '_filter_show_admin_bar' ), 99 );
+			// Preview mode (Edit / Preview switch): the canvas renders the posted, unsaved model as a
+			// normal visitor page, so every animation runs.
+			add_filter( 'the_content', array( $this, '_filter_motion_preview_content' ), -1 );
+			add_action( 'template_redirect', array( $this, '_action_motion_preview_headers' ) );
+			// Edit mode holds motion still: the editing canvas reports "reduce motion" to the page's
+			// scripts, before any of them load (priority 0 = the very first thing in <head>).
+			add_action( 'wp_head', array( $this, '_action_edit_canvas_hold_motion' ), 0 );
 			// Diagnostics — only when the editor was opened with ?fw-le-debug (the flag
 			// is propagated onto the frame URL by get_frame_url()). This keeps the debug
 			// HUD's server-side probe available on demand without any per-load overhead
@@ -351,7 +368,10 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @return bool
 	 * @internal
 	 */
-	public function _filter_force_wrapper( $needs ) {
+	public function _filter_force_wrapper( $needs, $atts = array() ) {
+		if ( ! $needs && $this->is_preview_focus( $atts ) ) {
+			return true; // the element being played in Preview needs a wrapper to carry its focus mark
+		}
 		if ( $this->is_edit_render() ) {
 			$this->force_wrapper_count++;
 			return true;
@@ -794,6 +814,15 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			true
 		);
 
+		// Interaction timeline (Animation Engine roadmap I4): docked under the canvas; extends fwLiveEditor.
+		wp_enqueue_script(
+			'fw-live-editor-ixtl',
+			fw_min_uri( $this->get_declared_URI( '/static/js/live-editor-ixtl.js' ) ),
+			array( 'fw-live-editor' ),
+			$this->asset_ver( '/static/js/live-editor-ixtl.js' ),
+			true
+		);
+
 		$builder_data = fw_get_db_post_option( $post->ID, $this->pb()->get_option_key() );
 
 		// Belt-and-braces for the icon picker inside the shell: guarantee
@@ -823,6 +852,10 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			// Auto-open the diagnostics HUD when the boot URL carries ?fw-le-debug.
 			'debug'    => (bool) FW_Request::GET( 'fw-le-debug' ),
 			'frameUrl' => $this->get_frame_url( $post ),
+			// Preview mode: the shell POSTs the current model here, into the canvas iframe.
+			'previewUrl' => add_query_arg( $this->preview_query_var, 1, get_permalink( $post->ID ) ),
+			// Play in Edit: the selected element's section alone, replayed over the Edit canvas.
+			'replayUrl'  => add_query_arg( $this->preview_query_var, 'replay', get_permalink( $post->ID ) ),
 			'exitUrl'  => get_permalink( $post->ID ),
 			'editUrl'  => admin_url( 'post.php?post=' . (int) $post->ID . '&action=edit' ),
 			'ajaxUrl'  => admin_url( 'admin-ajax.php' ),
@@ -1324,11 +1357,164 @@ class FW_Extension_Live_Editor extends FW_Extension {
 	 * @internal
 	 */
 	public function _filter_show_admin_bar( $show ) {
-		if ( $this->is_boot_request() || $this->is_frame_request() ) {
+		if ( $this->is_boot_request() || $this->is_frame_request() || $this->is_motion_preview_request() ) {
 			return false;
 		}
 
 		return $show;
+	}
+
+	/* ---------------------------------------------------------------------
+	 * Preview mode — the canvas as a visitor sees it, from the unsaved model
+	 * ------------------------------------------------------------------- */
+
+	/**
+	 * Is this the Preview canvas? `?fw-le-motion-preview=1` POSTed by the shell with the current model
+	 * (`json`) and the editor nonce, by someone who can edit this post. It is deliberately NOT a frame
+	 * request: no stamping, no editor bridge, no "settle the motion" guards — the page renders and runs
+	 * exactly as for a visitor (the runtimes that pause inside an iframe recognise the query var).
+	 *
+	 * @return array|false the decoded model, or false
+	 */
+	private function motion_preview_model() {
+		if ( null !== $this->preview_model ) {
+			return $this->preview_model;
+		}
+		if ( is_admin() || ! FW_Request::GET( $this->preview_query_var ) || ! did_action( 'wp' ) ) {
+			return false;
+		}
+		$this->preview_model = false;
+		$post_id = (int) get_queried_object_id();
+		$nonce   = (string) FW_Request::POST( 'nonce' );
+		if ( ! $post_id || ! wp_verify_nonce( $nonce, 'fw-live-editor:' . $post_id ) || ! current_user_can( 'edit_post', $post_id ) ) {
+			return false;
+		}
+		$json = json_decode( wp_unslash( (string) ( isset( $_POST['json'] ) ? $_POST['json'] : '' ) ), true );
+		if ( is_array( $json ) ) {
+			$this->preview_model = $json;
+		}
+		return $this->preview_model;
+	}
+
+	/** Preview "Play": the builder unique_id of the element being played (POST focus), or ''. */
+	private function motion_preview_focus() {
+		if ( ! $this->is_motion_preview_request() ) {
+			return '';
+		}
+		return preg_replace( '/[^A-Za-z0-9_-]/', '', (string) FW_Request::POST( 'focus' ) );
+	}
+
+	/** Is $atts the element being played in Preview? */
+	private function is_preview_focus( $atts ) {
+		if ( ! is_array( $atts ) || empty( $atts['unique_id'] ) ) {
+			return false;
+		}
+		$focus = $this->motion_preview_focus();
+		return $focus !== '' && (string) $atts['unique_id'] === $focus;
+	}
+
+	/** Preview "Play": stamp data-fw-le-focus on the played element's wrapper. @internal */
+	public function _filter_mark_preview_focus( $attr, $atts ) {
+		if ( $this->is_preview_focus( $atts ) ) {
+			$attr['data-fw-le-focus'] = '1';
+		}
+		return $attr;
+	}
+
+	/** @return bool */
+	private function is_motion_preview_request() {
+		return false !== $this->motion_preview_model();
+	}
+
+	/**
+	 * Preview canvas: replace the main post's builder content with the posted model, converted the same
+	 * way the page builder converts the saved one. Runs before do_shortcode (priority 11).
+	 *
+	 * @internal
+	 */
+	public function _filter_motion_preview_content( $content ) {
+		$model = $this->motion_preview_model();
+		if ( false === $model || ! in_the_loop() || ! is_main_query() || (int) get_the_ID() !== (int) get_queried_object_id() ) {
+			return $content;
+		}
+		// In-place Replay (`?fw-le-motion-preview=replay`): render only the top-level section that holds the
+		// played element, inside a marker the shell aligns over the same section on the Edit canvas.
+		$replay = $this->is_replay_request();
+		if ( $replay ) {
+			$focus = $this->motion_preview_focus();
+			$only  = array();
+			foreach ( $model as $item ) {
+				if ( $focus !== '' && $this->model_has_id( $item, $focus ) ) {
+					$only[] = $item;
+					break;
+				}
+			}
+			if ( $only ) {
+				$model = $only;
+			}
+		}
+		/** @var FW_Option_Type_Page_Builder $option_type */
+		$option_type = fw()->backend->option_type( 'page-builder' );
+		$shortcodes  = $option_type->json_to_shortcodes( $model );
+		if ( ! is_string( $shortcodes ) ) {
+			return $content;
+		}
+		// The padding keeps the section out of view until the shell scrolls it into place, so its
+		// scroll-into-view motion starts only once the replay is showing.
+		return $replay
+			? '<div data-fw-le-replay-root="1" style="padding:calc(100vh + 200px) 0 100vh">' . $shortcodes . '</div>'
+			: $shortcodes;
+	}
+
+	/** Is this the in-place Replay canvas (a Preview request for one section, laid over the Edit canvas)? */
+	private function is_replay_request() {
+		return $this->is_motion_preview_request() && 'replay' === (string) FW_Request::GET( $this->preview_query_var );
+	}
+
+	/** Does this builder item, or anything inside it, have the given unique_id? */
+	private function model_has_id( $item, $id ) {
+		if ( ! is_array( $item ) ) {
+			return false;
+		}
+		if ( isset( $item['atts']['unique_id'] ) && (string) $item['atts']['unique_id'] === $id ) {
+			return true;
+		}
+		if ( ! empty( $item['_items'] ) && is_array( $item['_items'] ) ) {
+			foreach ( $item['_items'] as $child ) {
+				if ( $this->model_has_id( $child, $id ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Edit mode: hold the page's motion still at its FINAL state, so everything is visible and easy to
+	 * select. The editing canvas answers the `prefers-reduced-motion: reduce` media query with "yes" for
+	 * the page's scripts: every Animation Engine module (and the entrance / exit runtime, the Motion
+	 * Gallery, Scroll Motion…) already has a reduced-motion path that shows a static, fully visible end
+	 * state, so one switch here settles them all without per-module code. It runs as the first thing in
+	 * <head>, before any module script. `window.upwEditCanvas` lets a module that needs to tell the
+	 * editor apart from a real visitor's setting do so. Preview mode is a normal page, unaffected.
+	 *
+	 * @internal
+	 */
+	public function _action_edit_canvas_hold_motion() {
+		if ( ! $this->is_frame_request() ) {
+			return;
+		}
+		echo "<script id=\"fw-le-hold-motion\">(function(){window.upwEditCanvas=true;var mm=window.matchMedia;if(!mm){return;}"
+			. "var still=function(q){return{matches:true,media:q,onchange:null,addListener:function(){},removeListener:function(){},addEventListener:function(){},removeEventListener:function(){},dispatchEvent:function(){return false;}};};"
+			. "window.matchMedia=function(q){return /prefers-reduced-motion\\s*:\\s*reduce/i.test(String(q))?still(q):mm.apply(window,arguments);};})();</script>\n";
+	}
+
+	/** Preview canvas: never cache it, and keep it out of search engines. @internal */
+	public function _action_motion_preview_headers() {
+		if ( $this->is_motion_preview_request() ) {
+			nocache_headers();
+			header( 'X-Robots-Tag: noindex, nofollow', true );
+		}
 	}
 
 	/* ---------------------------------------------------------------------

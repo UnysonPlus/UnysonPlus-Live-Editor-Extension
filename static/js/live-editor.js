@@ -348,6 +348,15 @@
 			$( '#fw-le-devices' ).on( 'click', '.fw-le-device', function () {
 				self.setDevice( this.getAttribute( 'data-device' ) );
 			} );
+			$( '#fw-le-modes' ).on( 'click', '.fw-le-mode[data-mode]', function () {
+				if ( this.getAttribute( 'data-mode' ) === 'preview' ) { self.playId = null; self.lastPlayId = self.selectedId || null; }
+				self.setMode( this.getAttribute( 'data-mode' ) );
+				if ( self.mode === 'preview' ) { self.showPreviewNote( true ); }
+			} );
+			$( '#fw-le-play' ).on( 'click', function () { self.playSelected(); } );
+			this.initTargetPicker();
+			// The Preview canvas has no editor bridge; when it loads, bring the played element into view.
+			this.$.frame.on( 'load', function () { if ( self.mode === 'preview' ) { self.focusPlayed(); } } );
 			this.buildIndex( this.model, null );
 			this.buildPanel();
 			this.refreshUndoRedo();
@@ -3158,6 +3167,18 @@
 			this.announceAiToFrame();
 			// A restore that happened before the frame was ready: render it now.
 			if ( this.pendingRender ) { this.pendingRender = false; this.renderPageToCanvas(); }
+			// Back from Preview: the editing canvas reloaded with the SAVED page, so put the unsaved
+			// model back into it.
+			if ( this.returningFromPreview ) {
+				this.returningFromPreview = false;
+				if ( this.dirty ) { this.renderPageToCanvas(); }
+				// Back from Play: select the element that was played again (after the re-render lands).
+				if ( this.lastPlayId ) {
+					var again = this.lastPlayId, me = this;
+					this.lastPlayId = null;
+					window.setTimeout( function () { me.toFrame( 'select-item', { id: again } ); }, this.dirty ? 2500 : 300 );
+				}
+			}
 		},
 
 		/** Tell the frame whether the AI Assistant is available, so it can show/hide
@@ -3235,6 +3256,7 @@
 			this.$.breadcrumb.empty();
 			var id = payload && payload.id;
 			this.selectedId = ( id && this.index[ id ] ) ? id : null;
+			$( '#fw-le-play' ).prop( 'disabled', ! this.selectedId );
 		this.selectedIds = this.selectedId ? [ this.selectedId ] : [];
 		this._selAnchor = this.selectedId;
 		this.applyMultiHighlight();
@@ -3288,6 +3310,7 @@
 						: ( isContainer( node ) ? 'large' : 'medium' );
 
 					self.log( 'opening modal for', id, 'with', ( options || [] ).length, 'option groups', 'size:', size );
+					self.modalItemId = id;   // the element whose options are open (Interactions' "Pick on the page")
 					self.modal = new fw.OptionsModal( {
 						title:   labelFor( node ),
 						options: options,
@@ -4138,6 +4161,427 @@
 		 *  unsaved edits, Save first to see them on the page. */
 		onPreview: function () {
 			window.open( cfg.exitUrl || '/', '_blank', 'noopener' );
+		},
+
+		/* ---- Edit / Preview modes -------------------------------------------------
+		 * Edit: the editing canvas (selection, inline editing, drag); motion is held still so things
+		 * are easy to pick. Preview: the canvas reloads as the page a VISITOR sees — every animation,
+		 * scroll effect and hover running — built from the current model, unsaved changes included.
+		 * The model is POSTed (json + nonce) into the iframe at cfg.previewUrl; the server swaps it in
+		 * as the page content (FW_Extension_Live_Editor::_filter_motion_preview_content). Back in
+		 * Edit, the editing canvas reloads and, if there are unsaved changes, is re-rendered from the
+		 * model (onFrameReady). Editing panels are dimmed while previewing. */
+		mode: 'edit',
+		setMode: function ( mode ) {
+			mode = mode === 'preview' ? 'preview' : 'edit';
+			this.closeReplay();
+			if ( mode === this.mode && mode === 'edit' ) { return; }
+			this.mode = mode;
+			$( '#fw-le-modes .fw-le-mode' ).each( function () {
+				var on = this.getAttribute( 'data-mode' ) === mode;
+				$( this ).toggleClass( 'is-active', on ).attr( 'aria-pressed', on ? 'true' : 'false' );
+			} );
+			$( 'body' ).toggleClass( 'fw-le-mode-preview', mode === 'preview' );
+			if ( mode === 'preview' ) {
+				$( 'body' ).removeClass( 'fw-le-panel-open' );
+				this.showPreviewNote( true );
+				this.frameReady = false;                    // the Preview canvas has no editor bridge
+				this.postPreview();
+				this.setStatus( 'ready', ( cfg.l10n && cfg.l10n.previewing ) || 'Previewing' );
+			} else {
+				this.showPreviewNote( false );
+				this.playId = null;
+				this.returningFromPreview = true;
+				this.setStatus( 'connecting', ( cfg.l10n && cfg.l10n.connecting ) || 'Connecting…' );
+				this.$.frame.attr( 'src', cfg.frameUrl );   // reload the editing canvas
+			}
+		},
+		/** POST the current model into the canvas iframe as a Preview request. Re-running it while in
+		 *  Preview (e.g. clicking Preview again) replays the page from the top. */
+		postPreview: function () {
+			if ( ! cfg.previewUrl ) { return; }
+			var $f = $( '#fw-le-preview-form' );
+			if ( ! $f.length ) {
+				$f = $( '<form id="fw-le-preview-form" method="post" target="fw-le-frame" style="display:none">' +
+					'<input type="hidden" name="json"><input type="hidden" name="nonce"><input type="hidden" name="focus"></form>' ).appendTo( 'body' );
+			}
+			$f.attr( 'action', cfg.previewUrl );
+			$f.find( '[name="json"]' ).val( JSON.stringify( this.model ) );
+			$f.find( '[name="nonce"]' ).val( cfg.nonce );
+			$f.find( '[name="focus"]' ).val( this.playId || '' );
+			$f[ 0 ].submit();
+		},
+		/** Play the selected element: Preview, scrolled to it, so its entrance / scroll / hover motion plays
+		 *  there (the server marks it data-fw-le-focus). Back to Edit returns to it, still selected. */
+		playSelected: function () {
+			if ( ! this.selectedId ) { return; }
+			// In Edit, replay it right where it is (no switch to Preview); "Full preview" in the note does that.
+			if ( this.mode === 'edit' && cfg.replayUrl && this.replayInPlace() ) { return; }
+			this.playFullPreview();
+		},
+		playFullPreview: function () {
+			if ( ! this.selectedId ) { return; }
+			this.closeReplay();
+			this.playId = this.lastPlayId = this.selectedId;
+			if ( this.mode === 'preview' ) { this.postPreview(); this.showPreviewNote( true ); return; }
+			this.setMode( 'preview' );
+		},
+
+		/* ---- Replay in place (Play while in Edit) ------------------------------------------------------
+		 * The Edit canvas holds motion still, and the modules start once per page, so rather than restart
+		 * thirty runtimes, the selected element's top-level SECTION is rendered on its own as a visitor sees
+		 * it (?fw-le-motion-preview=replay, the unsaved model, POSTed) into a second iframe laid exactly over
+		 * the Edit canvas and clipped to that section's rectangle. The server pads the section a screen and
+		 * more below the top, so nothing in it is "in view" until the shell scrolls it to the same spot it has
+		 * on the Edit canvas; only then does it show, and its entrance, Motion Gallery, hover and loop effects
+		 * start through their own code. Scrolling, Esc, Done or a click outside closes it. */
+		replayInPlace: function () {
+			var fwin, fdoc;
+			try { fwin = this.$.frame[ 0 ].contentWindow; fdoc = fwin.document; } catch ( e ) { return false; }
+			var el = fdoc && fdoc.querySelector( '[data-fw-item-id="' + this.selectedId + '"]' );
+			if ( ! el ) { return false; }
+			var sec = el, p = el.parentElement;
+			while ( p && p !== fdoc.body ) {
+				if ( p.hasAttribute( 'data-fw-item-id' ) ) { sec = p; }
+				p = p.parentElement;
+			}
+			// Centre the element first, where a visitor's scroll would bring it: a replay of something off-screen
+			// shows nothing, and an element with an Exit enters only once its middle reaches the centre band.
+			var er = el.getBoundingClientRect(), vh = fwin.innerHeight || 800;
+			if ( Math.abs( er.top + er.height / 2 - vh / 2 ) > 8 ) {
+				var to = Math.max( 0, er.top + fwin.pageYOffset - Math.max( 40, ( vh - Math.min( er.height, vh ) ) / 2 ) );
+				try { fwin.scrollTo( { top: to, behavior: 'instant' } ); } catch ( e ) { fwin.scrollTo( 0, to ); }
+			}
+			this.closeReplay();
+			this.replay = { id: this.selectedId, sec: sec, fwin: fwin, scrollY: fwin.pageYOffset };
+			var frame = this.$.frame[ 0 ], canvas = document.getElementById( 'fw-le-canvas' );
+			var cr = canvas.getBoundingClientRect(), fr = frame.getBoundingClientRect();
+			var $wrap = $( '<div id="fw-le-replay" class="fw-le-replay is-loading"><iframe name="fw-le-replay-frame" title="Replay"></iframe></div>' ).css( {
+				left:   fr.left - cr.left + canvas.scrollLeft - canvas.clientLeft,
+				top:    fr.top - cr.top + canvas.scrollTop - canvas.clientTop,
+				width:  fr.width,
+				height: fr.height
+			} ).appendTo( canvas );
+			this.replay.$wrap = $wrap;
+			this.clipReplay();
+			var self = this;
+			$wrap.find( 'iframe' ).on( 'load', function () { self.alignReplay( this ); } );
+			this.postTo( 'fw-le-replay-frame', cfg.replayUrl, this.selectedId );
+			this.showReplayNote( ( cfg.l10n && cfg.l10n.replayLoading ) || 'Loading the replay…' );
+			// Scrolling the Edit canvas (or resizing it) moves the section away from the replay: close it.
+			// (Watched only once the replay shows: the canvas may still be gliding to the selection before.)
+			this.replay.onScroll = function () {
+				if ( self.replay && self.replay.scrollY !== null && Math.abs( fwin.pageYOffset - self.replay.scrollY ) > 2 ) { self.closeReplay(); }
+			};
+			this.replay.scrollY = null;
+			fwin.addEventListener( 'scroll', this.replay.onScroll, { passive: true } );
+			$( window ).on( 'resize.fwLeReplay', function () { self.closeReplay(); } );
+			// Esc closes it, wherever the keyboard focus is (the shell, the Edit canvas or the replay itself).
+			this.replay.onKey = function ( e ) { if ( e.key === 'Escape' && self.replay ) { e.stopPropagation(); self.closeReplay(); } };
+			window.addEventListener( 'keydown', this.replay.onKey, true );
+			try { fwin.addEventListener( 'keydown', this.replay.onKey, true ); } catch ( e ) {}
+			return true;
+		},
+		/** Clip the overlay to the section's visible rectangle on the Edit canvas. */
+		clipReplay: function () {
+			var r = this.replay;
+			if ( ! r ) { return; }
+			var s = r.sec.getBoundingClientRect(), h = r.fwin.innerHeight || 800;
+			var top = Math.max( 0, Math.min( h, s.top ) ), bot = Math.max( 0, Math.min( h, s.bottom ) );
+			r.secTop = s.top;
+			r.$wrap.css( 'clip-path', 'inset(' + Math.round( top ) + 'px 0 ' + Math.round( h - bot ) + 'px 0)' );
+		},
+		/** The replay frame has loaded: scroll its section to the same spot it has on the Edit canvas, hide
+		 *  the page's fixed bars (a sticky header would sit over the section), then show it. */
+		alignReplay: function ( iframe ) {
+			var r = this.replay;
+			if ( ! r ) { return; }
+			var win, doc;
+			try { win = iframe.contentWindow; doc = win.document; } catch ( e ) { return; }
+			var root = doc && doc.querySelector( '[data-fw-le-replay-root]' );
+			if ( ! root ) { this.closeReplay(); this.playFullPreview(); return; }
+			this.clipReplay();                       // where the section sits on the Edit canvas now
+			r.scrollY = r.fwin.pageYOffset;
+			var sec = root.firstElementChild || root;
+			while ( sec && sec.nextElementSibling && ! sec.getBoundingClientRect().height ) { sec = sec.nextElementSibling; }
+			var all = doc.body.getElementsByTagName( '*' );
+			for ( var i = 0; i < all.length; i++ ) {
+				var n = all[ i ];
+				if ( root.contains( n ) ) { continue; }
+				var pos = win.getComputedStyle( n ).position;
+				if ( pos === 'fixed' || pos === 'sticky' ) { n.style.setProperty( 'visibility', 'hidden', 'important' ); }
+			}
+			var target = sec.getBoundingClientRect().top + win.pageYOffset - r.secTop;
+			var max = Math.max( 0, doc.documentElement.scrollHeight - ( win.innerHeight || 0 ) );
+			var s = Math.max( 0, Math.min( max, target ) );
+			win.scrollTo( 0, s );
+			iframe.style.transform = s !== target ? 'translateY(' + Math.round( s - target ) + 'px)' : '';
+			var self = this;
+			// A wheel over the replay scrolls the Edit canvas instead (and so ends the replay).
+			win.addEventListener( 'keydown', r.onKey, true );
+			win.addEventListener( 'wheel', function ( e ) {
+				var dy = e.deltaY;
+				self.closeReplay();
+				try { r.fwin.scrollBy( 0, dy ); } catch ( err ) {}
+			}, { passive: true } );
+			r.$wrap.removeClass( 'is-loading' );
+			this.showReplayNote( ( cfg.l10n && cfg.l10n.replayNote ) || 'Playing the selected element in place, with your unsaved changes.' );
+		},
+		closeReplay: function () {
+			var r = this.replay;
+			this.replay = null;
+			$( '#fw-le-replay-note' ).remove();
+			$( window ).off( 'resize.fwLeReplay' );
+			if ( ! r ) { return; }
+			window.removeEventListener( 'keydown', r.onKey, true );
+			try { r.fwin.removeEventListener( 'scroll', r.onScroll ); r.fwin.removeEventListener( 'keydown', r.onKey, true ); } catch ( e ) {}
+			if ( r.$wrap ) { r.$wrap.remove(); }
+		},
+		showReplayNote: function ( txt ) {
+			var $n = $( '#fw-le-replay-note' ), self = this;
+			if ( ! $n.length ) {
+				$n = $( '<div id="fw-le-replay-note" class="fw-le-preview-note fw-le-replay-note" role="status">' +
+					'<span class="dashicons dashicons-controls-play"></span>' +
+					'<span class="fw-le-preview-note__txt"></span>' +
+					'<button type="button" class="fw-le-preview-note__replay">' + ( ( cfg.l10n && cfg.l10n.replay ) || 'Replay' ) + '</button>' +
+					'<button type="button" class="fw-le-replay-note__full">' + ( ( cfg.l10n && cfg.l10n.fullPreview ) || 'Full preview' ) + '</button>' +
+					'<button type="button" class="fw-le-preview-note__edit">' + ( ( cfg.l10n && cfg.l10n.done ) || 'Done' ) + '</button>' +
+				'</div>' ).appendTo( '#fw-le-canvas' )
+					.on( 'click', '.fw-le-preview-note__replay', function () { var id = self.replay && self.replay.id; if ( id ) { self.selectedId = id; } self.replayInPlace(); } )
+					.on( 'click', '.fw-le-replay-note__full', function () { self.playFullPreview(); } )
+					.on( 'click', '.fw-le-preview-note__edit', function () { self.closeReplay(); } );
+			}
+			$n.find( '.fw-le-preview-note__txt' ).text( txt );
+		},
+		/* ---- Interactions: "Pick on the page" -------------------------------------------------------------
+		 * An Interactions step names its target with a CSS selector. In the Live Editor each selector field gets
+		 * a "Pick on the page" button: the options modal steps aside, elements highlight under the pointer, and
+		 * the clicked one becomes the target: its CSS ID if it has one, otherwise a short class (ix-xxxxxx) added
+		 * to its CSS classes (an ordinary, undoable edit). The step's "Animate" switches to match: this element,
+		 * inside it, or on the page. Esc or Cancel leaves everything as it was. */
+		initTargetPicker: function () {
+			var self = this;
+			var addButtons = function () {
+				// States card: "Show this state on the canvas" beside each state's name.
+				$( 'input.upw-st-name' ).each( function () {
+					var $in = $( this );
+					if ( $in.next( '.upw-st-show' ).length ) { return; }
+					$( '<button type="button" class="button upw-st-show">' + ( ( cfg.l10n && cfg.l10n.showState ) || 'Show this state on the canvas' ) + '</button>' )
+						.insertAfter( $in )
+						.on( 'click', function ( e ) { e.preventDefault(); self.showStateOnCanvas( $in ); } );
+				} );
+				$( 'input.upw-ix-selector' ).each( function () {
+					var $in = $( this );
+					if ( $in.next( '.upw-ix-pick' ).length ) { return; }
+					$( '<button type="button" class="button upw-ix-pick">' + ( ( cfg.l10n && cfg.l10n.pickOnPage ) || 'Pick on the page' ) + '</button>' )
+						.insertAfter( $in )
+						.on( 'click', function ( e ) { e.preventDefault(); self.pickTarget( $in ); } );
+				} );
+			};
+			if ( window.MutationObserver ) {
+				var t = null;
+				new MutationObserver( function () {
+					if ( t ) { return; }
+					t = window.setTimeout( function () { t = null; addButtons(); }, 60 );
+				} ).observe( document.body, { childList: true, subtree: true } );
+			}
+		},
+		pickTarget: function ( $input ) {
+			var self = this, fwin, fdoc;
+			try { fwin = this.$.frame[ 0 ].contentWindow; fdoc = fwin.document; } catch ( e ) { return; }
+			if ( ! fdoc || this.mode !== 'edit' ) { return; }
+			this.closeReplay();
+			$( 'body' ).addClass( 'fw-le-ix-picking' );
+			var hl = fdoc.createElement( 'div' );
+			hl.style.cssText = 'position:fixed;pointer-events:none;z-index:2147483646;border:2px solid #00b295;background:rgba(0,178,149,.08);border-radius:4px;display:none;transition:all .08s ease';
+			var tag = fdoc.createElement( 'div' );
+			tag.style.cssText = 'position:absolute;left:-2px;top:-24px;background:#00b295;color:#fff;font:600 11px/1 -apple-system,Segoe UI,Roboto,sans-serif;padding:5px 7px;border-radius:4px 4px 0 0;white-space:nowrap';
+			hl.appendChild( tag );
+			fdoc.body.appendChild( hl );
+			var $note = $( '<div id="fw-le-pick-note" class="fw-le-preview-note" role="status"><span class="dashicons dashicons-location"></span>' +
+				'<span class="fw-le-preview-note__txt"></span><button type="button" class="fw-le-preview-note__edit">' + ( ( cfg.l10n && cfg.l10n.cancel ) || 'Cancel' ) + '</button></div>' )
+				.appendTo( '#fw-le-canvas' );
+			$note.find( '.fw-le-preview-note__txt' ).text( ( cfg.l10n && cfg.l10n.pickNote ) || 'Click the element this step should animate. Esc cancels.' );
+			var itemOf = function ( n ) { return n && n.closest ? n.closest( '[data-fw-item-id]' ) : null; };
+			var over = function ( e ) {
+				var it = itemOf( e.target );
+				if ( ! it ) { hl.style.display = 'none'; return; }
+				var r = it.getBoundingClientRect(), node = self.nodeOf( it.getAttribute( 'data-fw-item-id' ) );
+				hl.style.display = 'block';
+				hl.style.left = r.left + 'px'; hl.style.top = r.top + 'px'; hl.style.width = r.width + 'px'; hl.style.height = r.height + 'px';
+				tag.textContent = node ? labelFor( node ) : '';
+				tag.style.top = r.top < 26 ? '0' : '-24px';
+			};
+			var stop = function ( e ) { e.preventDefault(); e.stopPropagation(); if ( e.stopImmediatePropagation ) { e.stopImmediatePropagation(); } };
+			var done = function () {
+				fwin.removeEventListener( 'mouseover', over, true );
+				[ 'click', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick' ].forEach( function ( t ) { fwin.removeEventListener( t, t === 'click' ? onClick : stop, true ); } );
+				fwin.removeEventListener( 'keydown', onKey, true );
+				window.removeEventListener( 'keydown', onKey, true );
+				if ( hl.parentNode ) { hl.parentNode.removeChild( hl ); }
+				$note.remove();
+				$( 'body' ).removeClass( 'fw-le-ix-picking' );
+			};
+			var onKey = function ( e ) { if ( e.key === 'Escape' ) { stop( e ); done(); } };
+			var onClick = function ( e ) {
+				stop( e );
+				var it = itemOf( e.target );
+				if ( ! it ) { return; }
+				done();
+				self.applyPickedTarget( $input, it.getAttribute( 'data-fw-item-id' ), it, fdoc );
+			};
+			fwin.addEventListener( 'mouseover', over, true );
+			[ 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'dblclick' ].forEach( function ( t ) { fwin.addEventListener( t, stop, true ); } );
+			fwin.addEventListener( 'click', onClick, true );
+			fwin.addEventListener( 'keydown', onKey, true );
+			window.addEventListener( 'keydown', onKey, true );
+			$note.on( 'click', '.fw-le-preview-note__edit', function () { done(); } );
+		},
+		/**
+		 * States card: show the state being edited on the canvas. The options window steps aside, the element
+		 * is centred and animated from its normal look to the state's values (with its upw-is-<name> class), read
+		 * straight from the unsaved fields. "Play again" repeats it; "Back to the options" puts everything back.
+		 */
+		showStateOnCanvas: function ( $nameInput ) {
+			var self = this, fwin, fdoc;
+			try { fwin = this.$.frame[ 0 ].contentWindow; fdoc = fwin.document; } catch ( e ) { return; }
+			var el = this.modalItemId && fdoc ? fdoc.querySelector( '[data-fw-item-id="' + this.modalItemId + '"]' ) : null;
+			if ( ! el || ! el.animate || this.mode !== 'edit' ) { return; }
+			var name = String( $nameInput.val() || '' ).toLowerCase().replace( /[^a-z0-9]+/g, '-' ).replace( /^-+|-+$/g, '' );
+			if ( ! name ) { notify( ( cfg.l10n && cfg.l10n.stateNeedsName ) || 'Give the state a name first.', 'warning' ); return; }
+			var $box = $nameInput.parent();
+			while ( $box.length && ! $box.is( 'body' ) && ! $box.find( '[name$="[duration]"]' ).length ) { $box = $box.parent(); }
+			var num = function ( k, def ) { var v = parseFloat( $box.find( '[name$="[' + k + ']"]' ).first().val() ); return isNaN( v ) ? def : v; };
+			var x = num( 'x', 0 ), y = num( 'y', 0 ), sc = num( 'scale', 1 ), r = num( 'rotate', 0 ), op = num( 'opacity', 1 ), bl = num( 'blur', 0 );
+			var vals = {};
+			if ( x || y ) { vals.translate = x + 'px ' + y + 'px'; }
+			if ( sc !== 1 ) { vals.scale = String( sc ); }
+			if ( r ) { vals.rotate = r + 'deg'; }
+			if ( op !== 1 ) { vals.opacity = String( op ); }
+			if ( bl ) { vals.filter = 'blur(' + bl + 'px)'; }
+			var eases = { out: 'cubic-bezier(.22,1,.36,1)', inout: 'cubic-bezier(.65,0,.35,1)', 'in': 'cubic-bezier(.64,0,.78,0)', back: 'cubic-bezier(.34,1.56,.64,1)', linear: 'linear' };
+			var ease = eases[ $box.find( 'select[name$="[ease]"]' ).first().val() ] || eases.out;
+			var dur = Math.max( 0, num( 'duration', 0.4 ) ) * 1000;
+			var extra = String( $box.find( 'input[name$="[class]"]' ).first().val() || '' ).split( /\s+/ ).filter( function ( c ) { return /^[A-Za-z0-9_-]+$/.test( c ); } );
+			var classes = [ 'upw-is-' + name ].concat( extra );
+			var anim = null;
+			var run = function () {
+				if ( anim ) { try { anim.cancel(); } catch ( e ) {} }
+				classes.forEach( function ( c ) { el.classList.remove( c ); } );
+				void el.offsetWidth;
+				classes.forEach( function ( c ) { el.classList.add( c ); } );
+				if ( Object.keys( vals ).length ) {
+					try { anim = el.animate( [ Object.assign( { offset: 1 }, vals ) ], { duration: Math.max( dur, 1 ), easing: ease, fill: 'forwards', delay: 250 } ); } catch ( e ) { anim = null; }
+				}
+			};
+			var done = function () {
+				if ( anim ) { try { anim.cancel(); } catch ( e ) {} }
+				classes.forEach( function ( c ) { el.classList.remove( c ); } );
+				$note.remove();
+				$( 'body' ).removeClass( 'fw-le-ix-picking' );
+				window.removeEventListener( 'keydown', onKey, true );
+			};
+			var onKey = function ( e ) { if ( e.key === 'Escape' ) { e.preventDefault(); e.stopPropagation(); done(); } };
+			this.closeReplay();
+			$( 'body' ).addClass( 'fw-le-ix-picking' );
+			var er = el.getBoundingClientRect(), vh = fwin.innerHeight || 800;
+			try { fwin.scrollTo( { top: Math.max( 0, er.top + fwin.pageYOffset - Math.max( 40, ( vh - Math.min( er.height, vh ) ) / 2 ) ), behavior: 'instant' } ); } catch ( e ) {}
+			var $note = $( '<div id="fw-le-pick-note" class="fw-le-preview-note" role="status"><span class="dashicons dashicons-visibility"></span>' +
+				'<span class="fw-le-preview-note__txt"></span>' +
+				'<button type="button" class="fw-le-preview-note__replay">' + ( ( cfg.l10n && cfg.l10n.playAgain ) || 'Play again' ) + '</button>' +
+				'<button type="button" class="fw-le-preview-note__edit">' + ( ( cfg.l10n && cfg.l10n.backToOptions ) || 'Back to the options' ) + '</button></div>' )
+				.appendTo( '#fw-le-canvas' );
+			$note.find( '.fw-le-preview-note__txt' ).text( ( ( cfg.l10n && cfg.l10n.showingState ) || 'Showing the state:' ) + ' ' + name );
+			$note.on( 'click', '.fw-le-preview-note__replay', run ).on( 'click', '.fw-le-preview-note__edit', done );
+			window.addEventListener( 'keydown', onKey, true );
+			run();
+		},
+
+		/** Turn the picked element into a selector, fill the step in, and give the element a class if it needs one. */
+		applyPickedTarget: function ( $input, pickedId, pickedEl, fdoc ) {
+			var node = this.nodeOf( pickedId );
+			if ( ! node ) { return; }
+			node.atts = node.atts || {};
+			var sel, owner = this.modalItemId;
+			var ownerEl = owner ? fdoc.querySelector( '[data-fw-item-id="' + owner + '"]' ) : null;
+			var where = pickedId === owner ? 'self' : ( ownerEl && ownerEl.contains( pickedEl ) ? 'inside' : 'page' );
+			var cssId = $.trim( String( node.atts.css_id || '' ) ).toLowerCase().replace( /\s+/g, '-' );
+			if ( cssId ) {
+				sel = '#' + cssId;
+			} else {
+				var classes = String( node.atts.css_class || '' ).split( /\s+/ ).filter( Boolean );
+				var mine = classes.filter( function ( c ) { return /^ix-[a-z0-9]+$/i.test( c ); } )[ 0 ];
+				if ( ! mine ) {
+					mine = 'ix-' + String( pickedId ).replace( /[^a-z0-9]/gi, '' ).slice( 0, 6 ).toLowerCase();
+					if ( where !== 'self' ) {
+						this.recordHistory( this.snapshot() );
+						classes.push( mine );
+						node.atts.css_class = classes.join( ' ' );
+						this.markDirty();
+						this.syncFrameModel();
+						this.renderItem( pickedId );
+					}
+				}
+				sel = '.' + mine;
+			}
+			// Find this step's "Animate" select: the nearest container above the field that holds one.
+			var $box = $input.parent(), $target = $();
+			while ( $box.length && ! $box.is( 'body' ) ) {
+				$target = $box.find( 'select[name$="[target]"], select[id$="-target"]' );
+				if ( $target.length ) { break; }
+				$box = $box.parent();
+			}
+			if ( $target.length === 1 ) { $target.val( where ).trigger( 'change' ); }
+			$input.val( where === 'self' ? '' : sel ).trigger( 'input' ).trigger( 'change' );
+			notify( where === 'self'
+				? ( ( cfg.l10n && cfg.l10n.pickedSelf ) || 'Step set to animate this element.' )
+				: ( ( ( cfg.l10n && cfg.l10n.picked ) || 'Target set:' ) + ' ' + sel ), 'success' );
+		},
+
+		/** POST the current model (json + nonce + the focused element) into a named iframe. */
+		postTo: function ( target, url, focus ) {
+			var $f = $( '<form method="post" style="display:none">' +
+				'<input type="hidden" name="json"><input type="hidden" name="nonce"><input type="hidden" name="focus"></form>' )
+				.attr( { action: url, target: target } ).appendTo( 'body' );
+			$f.find( '[name="json"]' ).val( JSON.stringify( this.model ) );
+			$f.find( '[name="nonce"]' ).val( cfg.nonce );
+			$f.find( '[name="focus"]' ).val( focus || '' );
+			$f[ 0 ].submit();
+			$f.remove();
+		},
+		/** In the freshly loaded Preview canvas, start the played element just below the screen, then glide it
+		 *  to the middle — so a scroll-into-view entrance plays as it would for a visitor. */
+		focusPlayed: function () {
+			if ( ! this.playId ) { return; }
+			var win, doc;
+			try { win = this.$.frame[ 0 ].contentWindow; doc = win.document; } catch ( e ) { return; }
+			var el = doc && doc.querySelector( '[data-fw-le-focus]' );
+			if ( ! el ) { return; }
+			var top = el.getBoundingClientRect().top + win.pageYOffset;
+			var vh = win.innerHeight || 800, h = el.offsetHeight || 0;
+			win.scrollTo( 0, Math.max( 0, top - vh - 20 ) );
+			win.setTimeout( function () {
+				var target = Math.max( 0, top - Math.max( 40, ( vh - Math.min( h, vh ) ) / 2 ) );
+				try { win.scrollTo( { top: target, behavior: 'smooth' } ); } catch ( e ) { win.scrollTo( 0, target ); }
+			}, 450 );
+		},
+		showPreviewNote: function ( on ) {
+			var $n = $( '#fw-le-preview-note' );
+			if ( ! on ) { $n.remove(); return; }
+			var txt = this.playId
+				? ( ( cfg.l10n && cfg.l10n.playNote ) || 'Playing the selected element, with your unsaved changes.' )
+				: ( ( cfg.l10n && cfg.l10n.previewNote ) || 'Preview: the page as visitors see it, with your unsaved changes.' );
+			if ( $n.length ) { $n.find( '.fw-le-preview-note__txt' ).text( txt ); return; }
+			var self = this;
+			$( '<div id="fw-le-preview-note" class="fw-le-preview-note" role="status">' +
+				'<span class="dashicons dashicons-controls-play"></span>' +
+				'<span class="fw-le-preview-note__txt"></span>' +
+				'<button type="button" class="fw-le-preview-note__replay">' + ( ( cfg.l10n && cfg.l10n.replay ) || 'Replay' ) + '</button>' +
+				'<button type="button" class="fw-le-preview-note__edit">' + ( ( cfg.l10n && cfg.l10n.backToEdit ) || 'Back to Edit' ) + '</button>' +
+			'</div>' ).appendTo( '#fw-le-canvas' )
+				.on( 'click', '.fw-le-preview-note__replay', function () { self.postPreview(); } )
+				.on( 'click', '.fw-le-preview-note__edit', function () { self.setMode( 'edit' ); } )
+				.find( '.fw-le-preview-note__txt' ).text( txt );
 		},
 
 		/** Switch to the classic backend builder for this page (warns if unsaved). */
