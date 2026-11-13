@@ -3305,7 +3305,7 @@
 
 					// Use the shortcode's own popup_size (matches the classic builder);
 					// fall back to large for containers / medium for leaves.
-					var size = ( popupSize === 'small' || popupSize === 'medium' || popupSize === 'large' )
+					var size = ( popupSize === 'small' || popupSize === 'medium' || popupSize === 'large' || popupSize === 'full' )
 						? popupSize
 						: ( isContainer( node ) ? 'large' : 'medium' );
 
