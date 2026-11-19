@@ -4438,6 +4438,74 @@
 			$note.on( 'click', '.fw-le-preview-note__edit', function () { done(); } );
 		},
 		/**
+		 * Interactions / States preview helpers (Animation Engine 5a / 6a), the same maths as the runtime
+		 * (animation-engine/modules/interactions/static/js/upw-interactions.js): a saved easing key as CSS, a step /
+		 * state's raw option values as the runtime's compact shape, and the Web Animations for one target.
+		 */
+		ixEase: function ( key ) {
+			var map = cfg.easeCss || {};
+			key = String( key || '' );
+			var css = map[ key ] || ( key.indexOf( 'cubic-bezier(' ) === 0 ? key : '' ) || map.out || 'cubic-bezier(.22,1,.36,1)';
+			var ok = !! ( window.CSS && CSS.supports && CSS.supports( 'transition-timing-function', 'linear(0, 1)' ) );
+			if ( ok || css.indexOf( 'linear(' ) !== 0 ) { return css; }
+			return css.split( ',' ).some( function ( v ) { return parseFloat( v.replace( 'linear(', '' ) ) > 1.001; } ) ? 'cubic-bezier(.34,1.56,.64,1)' : 'cubic-bezier(.22,1,.36,1)';
+		},
+		/** num( key, def ) reads a number, txt( key ) a string, moreOn = "More properties" is On. */
+		ixCompact: function ( num, txt, moreOn ) {
+			var s = { x: num( 'x', 0 ), y: num( 'y', 0 ), sc: num( 'scale', 1 ), r: num( 'rotate', 0 ), op: num( 'opacity', 1 ), bl: num( 'blur', 0 ) };
+			if ( ! moreOn ) { return s; }
+			var cl = function ( v, a, b ) { return Math.max( a, Math.min( b, v ) ); };
+			[ [ 'w', 'width', 1600 ], [ 'h', 'height', 1200 ], [ 'rad', 'radius', 300 ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 0 ), 0, d[ 2 ] ); if ( v > 0 ) { s[ d[ 0 ] ] = v; } } );
+			[ [ 'skx', 'skew_x', 60 ], [ 'sky', 'skew_y', 60 ], [ 'rx', 'rotate_x', 180 ], [ 'ry', 'rotate_y', 180 ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 0 ), -d[ 2 ], d[ 2 ] ); if ( v ) { s[ d[ 0 ] ] = v; } } );
+			[ [ 'bg', 'background' ], [ 'fg', 'color' ], [ 'bc', 'border_color' ] ].forEach( function ( d ) { var c = String( txt( d[ 1 ] ) || '' ).trim(); if ( c ) { s[ d[ 0 ] ] = c; } } );
+			[ [ 'br', 'brightness' ], [ 'ct', 'contrast' ], [ 'sa', 'saturate' ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 100 ), 0, 300 ); if ( Math.abs( v - 100 ) > 0.01 ) { s[ d[ 0 ] ] = v; } } );
+			var gs = cl( num( 'grayscale', 0 ), 0, 100 );
+			if ( gs > 0 ) { s.gs = gs; }
+			var side = { left: 'l', right: 'r', top: 't', bottom: 'b', circle: 'c' }[ txt( 'clip' ) ], ca = cl( num( 'clip_amount', 100 ), 0, 100 );
+			if ( side && ca > 0 ) { s.cs = side; s.ca = ca; }
+			return s;
+		},
+		/** The Web Animations for one target (paused at 0), like the runtime's animate(). */
+		ixAnimate: function ( node, s, from, timing ) {
+			var out = [], k = {}, f = [], t = [];
+			if ( s.x || s.y ) { k.translate = ( s.x || 0 ) + 'px ' + ( s.y || 0 ) + 'px'; }
+			if ( s.sc !== 1 ) { k.scale = String( s.sc ); }
+			if ( s.r ) { k.rotate = s.r + 'deg'; }
+			if ( s.op !== 1 ) { k.opacity = String( s.op ); }
+			if ( s.w ) { k.width = s.w + 'px'; }
+			if ( s.h ) { k.height = s.h + 'px'; }
+			if ( s.rad ) { k.borderRadius = s.rad + 'px'; }
+			if ( s.bg ) { k.backgroundColor = s.bg; }
+			if ( s.fg ) { k.color = s.fg; }
+			if ( s.bc ) { k.borderColor = s.bc; }
+			if ( s.bl ) { f.push( 'blur(' + s.bl + 'px)' ); }
+			if ( s.br !== undefined ) { f.push( 'brightness(' + s.br / 100 + ')' ); }
+			if ( s.ct !== undefined ) { f.push( 'contrast(' + s.ct / 100 + ')' ); }
+			if ( s.sa !== undefined ) { f.push( 'saturate(' + s.sa / 100 + ')' ); }
+			if ( s.gs ) { f.push( 'grayscale(' + s.gs / 100 + ')' ); }
+			if ( f.length ) { k.filter = f.join( ' ' ); }
+			if ( s.rx || s.ry ) { t.push( 'perspective(900px)' ); }
+			if ( s.rx ) { t.push( 'rotateX(' + s.rx + 'deg)' ); }
+			if ( s.ry ) { t.push( 'rotateY(' + s.ry + 'deg)' ); }
+			if ( s.skx || s.sky ) { t.push( 'skew(' + ( s.skx || 0 ) + 'deg, ' + ( s.sky || 0 ) + 'deg)' ); }
+			var clip = null;
+			if ( s.cs && s.ca ) {
+				if ( s.cs === 'c' ) { clip = [ 'circle(100% at 50% 50%)', 'circle(' + ( 100 - s.ca ) + '% at 50% 50%)' ]; } else {
+					var v = [ -30, -30, -30, -30 ];
+					v[ { t: 0, r: 1, b: 2, l: 3 }[ s.cs ] ] = -30 + 130 * s.ca / 100;
+					clip = [ 'inset(-30% -30% -30% -30%)', 'inset(' + v.join( '% ' ) + '%)' ];
+				}
+			}
+			var one = function ( kf, extra ) {
+				try { var x = node.animate( kf, extra ? Object.assign( {}, timing, extra ) : timing ); x.pause(); x.currentTime = 0; out.push( x ); } catch ( e ) {}
+			};
+			if ( Object.keys( k ).length ) { one( [ Object.assign( { offset: from ? 0 : 1 }, k ) ] ); }
+			if ( t.length ) { one( [ { offset: from ? 0 : 1, transform: t.join( ' ' ) } ], { composite: 'add' } ); }
+			if ( clip ) { one( from ? [ { clipPath: clip[ 1 ] }, { clipPath: clip[ 0 ] } ] : [ { clipPath: clip[ 0 ] }, { clipPath: clip[ 1 ] } ] ); }
+			return out;
+		},
+
+		/**
 		 * States card: show the state being edited on the canvas. The options window steps aside, the element
 		 * is centred and animated from its normal look to the state's values (with its upw-is-<name> class), read
 		 * straight from the unsaved fields. "Play again" repeats it; "Back to the options" puts everything back.
@@ -4452,30 +4520,25 @@
 			var $box = $nameInput.parent();
 			while ( $box.length && ! $box.is( 'body' ) && ! $box.find( '[name$="[duration]"]' ).length ) { $box = $box.parent(); }
 			var num = function ( k, def ) { var v = parseFloat( $box.find( '[name$="[' + k + ']"]' ).first().val() ); return isNaN( v ) ? def : v; };
-			var x = num( 'x', 0 ), y = num( 'y', 0 ), sc = num( 'scale', 1 ), r = num( 'rotate', 0 ), op = num( 'opacity', 1 ), bl = num( 'blur', 0 );
-			var vals = {};
-			if ( x || y ) { vals.translate = x + 'px ' + y + 'px'; }
-			if ( sc !== 1 ) { vals.scale = String( sc ); }
-			if ( r ) { vals.rotate = r + 'deg'; }
-			if ( op !== 1 ) { vals.opacity = String( op ); }
-			if ( bl ) { vals.filter = 'blur(' + bl + 'px)'; }
-			var eases = { out: 'cubic-bezier(.22,1,.36,1)', inout: 'cubic-bezier(.65,0,.35,1)', 'in': 'cubic-bezier(.64,0,.78,0)', back: 'cubic-bezier(.34,1.56,.64,1)', linear: 'linear' };
-			var ease = eases[ $box.find( 'select[name$="[ease]"]' ).first().val() ] || eases.out;
+			var txt = function ( k ) { return $box.find( '[name$="[' + k + ']"]' ).first().val(); };
+			var moreOn = $box.find( '[name$="[more][mode]"]' ).first().val() === 'on';
+			var comp = this.ixCompact( num, txt, moreOn );
+			var ease = this.ixEase( $box.find( '[name$="[ease]"]' ).first().val() );
 			var dur = Math.max( 0, num( 'duration', 0.4 ) ) * 1000;
 			var extra = String( $box.find( 'input[name$="[class]"]' ).first().val() || '' ).split( /\s+/ ).filter( function ( c ) { return /^[A-Za-z0-9_-]+$/.test( c ); } );
 			var classes = [ 'upw-is-' + name ].concat( extra );
-			var anim = null;
+			var anim = [];
+			var stop = function () { anim.forEach( function ( a ) { try { a.cancel(); } catch ( e ) {} } ); anim = []; };
 			var run = function () {
-				if ( anim ) { try { anim.cancel(); } catch ( e ) {} }
+				stop();
 				classes.forEach( function ( c ) { el.classList.remove( c ); } );
 				void el.offsetWidth;
 				classes.forEach( function ( c ) { el.classList.add( c ); } );
-				if ( Object.keys( vals ).length ) {
-					try { anim = el.animate( [ Object.assign( { offset: 1 }, vals ) ], { duration: Math.max( dur, 1 ), easing: ease, fill: 'forwards', delay: 250 } ); } catch ( e ) { anim = null; }
-				}
+				anim = self.ixAnimate( el, comp, false, { duration: Math.max( dur, 1 ), easing: ease, fill: 'forwards', delay: 250 } );
+				anim.forEach( function ( a ) { a.play(); } );
 			};
 			var done = function () {
-				if ( anim ) { try { anim.cancel(); } catch ( e ) {} }
+				stop();
 				classes.forEach( function ( c ) { el.classList.remove( c ); } );
 				$note.remove();
 				$( 'body' ).removeClass( 'fw-le-ix-picking' );

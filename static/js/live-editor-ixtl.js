@@ -72,7 +72,7 @@
 				var st = steps[ sk ] || {};
 				var tg = st.target || ( i === 0 ? 'self' : 'none' );
 				if ( tg === 'none' ) { return; }
-				var isState = /^state_/.test( st.action || '' );
+				var isState = /^(state_|set$|lottie$|rive$|burst$)/.test( st.action || '' ); // instant steps: a marker, no bar
 				var d = isState ? 0 : self.num( st.duration, 0.5 ), dl = self.num( st.delay, 0 ), stg = self.num( st.stagger, 0.08 );
 				var nodes = el ? self.targets( el, st ) : [];
 				var n = Math.max( 1, nodes.length );
@@ -90,7 +90,11 @@
 			var who = tg === 'self' ? L( 'tlSelf', 'This element' ) : ( ( tg === 'inside' ? L( 'tlInside', 'Inside: ' ) : '' ) + ( st.selector || ( tg === 'inside' ? L( 'tlChildren', 'children' ) : '?' ) ) );
 			var what;
 			if ( r.isState ) {
-				what = ( st.action === 'state_on' ? '→ ' : st.action === 'state_off' ? '← ' : '⇄ ' ) + ( st.state || '?' );
+				what = st.action === 'set' ? 'Set: ' + String( st.set || 'hide' ).replace( '_', ' ' ) + ( st.set_value ? ' ' + st.set_value : '' )
+					: st.action === 'lottie' ? 'Lottie: ' + ( st.lottie || 'play' )
+					: st.action === 'burst' ? 'Burst: ' + ( st.burst || 'mix' )
+					: st.action === 'rive' ? 'Rive: ' + ( st.rive || 'trigger' ) + ( st.rive_name ? ' ' + st.rive_name : '' )
+					: ( st.action === 'state_on' ? '→ ' : st.action === 'state_off' ? '← ' : '⇄ ' ) + ( st.state || '?' );
 			} else {
 				var bits = [], self = this;
 				[ [ 'x', 'X', 0 ], [ 'y', 'Y', 0 ], [ 'scale', 'Scale', 1 ], [ 'rotate', 'Rotate', 0 ], [ 'opacity', 'Opacity', 1 ], [ 'blur', 'Blur', 0 ] ].forEach( function ( p ) {
@@ -232,13 +236,20 @@
 			var self = this, total = pl.total;
 			pl.rows.forEach( function ( r ) {
 				if ( r.isState ) { return; }
-				var vals = self.vals( r.st );
-				if ( ! Object.keys( vals ).length ) { return; }
-				var kf = r.st.direction === 'from' ? [ Object.assign( { offset: 0 }, vals ) ] : [ Object.assign( { offset: 1 }, vals ) ];
+				var st = r.st, more = st.more && st.more.mode === 'on' && st.more.on ? st.more.on : {};
+				var comp = typeof app.ixCompact === 'function'
+					? app.ixCompact( function ( k, d ) { return self.num( k in more ? more[ k ] : st[ k ], d ); }, function ( k ) { return more[ k ]; }, !! ( st.more && st.more.mode === 'on' ) )
+					: null;
+				var ease = typeof app.ixEase === 'function' ? app.ixEase( st.ease ) : ( EASE[ st.ease ] || EASE.out );
+				var vals = self.vals( st );
+				if ( ! comp && ! Object.keys( vals ).length ) { return; }
+				var kf = st.direction === 'from' ? [ Object.assign( { offset: 0 }, vals ) ] : [ Object.assign( { offset: 1 }, vals ) ];
 				r.nodes.forEach( function ( n, i ) {
 					var at = ( r.start + i * r.stg ) * 1000, dur = r.d * 1000;
+					var timing = { duration: Math.max( 1, dur ), delay: at, endDelay: Math.max( 0, total * 1000 - at - dur ), easing: ease, fill: 'both' };
+					if ( comp ) { self.anims = self.anims.concat( app.ixAnimate( n, comp, st.direction === 'from', timing ) ); return; }
 					try {
-						var a = n.animate( kf, { duration: Math.max( 1, dur ), delay: at, endDelay: Math.max( 0, total * 1000 - at - dur ), easing: EASE[ r.st.ease ] || EASE.out, fill: 'both' } );
+						var a = n.animate( kf, timing );
 						a.pause();
 						self.anims.push( a );
 					} catch ( e ) {}

@@ -930,6 +930,19 @@ class FW_Extension_Live_Editor extends FW_Extension {
 					'column'  => wp_create_nonce( 'fw_builder_templates_column' ),
 				),
 			),
+			// Every curve of the shared easing picker as its CSS timing function (springs as linear()), so the
+			// Interaction timeline and the States preview play the curve the page will.
+			'easeCss'  => ( function () {
+				$out = array( 'out' => 'cubic-bezier(.22,1,.36,1)', 'inout' => 'cubic-bezier(.65,0,.35,1)', 'in' => 'cubic-bezier(.64,0,.78,0)', 'back' => 'cubic-bezier(.34,1.56,.64,1)', 'linear' => 'linear' );
+				if ( function_exists( 'sc_easing_defs' ) ) {
+					foreach ( sc_easing_defs() as $k => $d ) {
+						if ( ! empty( $d['css'] ) ) {
+							$out[ $k ] = (string) $d['css'];
+						}
+					}
+				}
+				return $out;
+			} )(),
 			'l10n'     => array(
 				'title'       => __( 'Live Editor', 'fw' ),
 				'save'        => __( 'Save', 'fw' ),
