@@ -363,6 +363,13 @@
 				// The AI Assistant extension is active — reveal the per-element
 				// "Ask AI" button on the selection toolbar.
 				if ( this.els && this.els.aiBtn ) { this.els.aiBtn.style.display = ''; }
+				this.aiReady = true;
+			} else if ( data.type === 'collab-pins' ) {
+				this.collabPins = ( data.payload && data.payload.pins ) || [];
+				this.drawCollab();
+			} else if ( data.type === 'collab-presence' ) {
+				this.collabUsers = ( data.payload && data.payload.users ) || [];
+				this.drawCollab();
 			} else if ( data.type === 'toggle-wireframe' ) {
 				this.applyWireframe( data.payload && data.payload.on );
 			} else if ( data.type === 'contrast' ) {
@@ -1804,7 +1811,10 @@
 			this.els.dropline  = root.querySelector( '#fw-le-dropline' );
 
 			var self = this;
-			this.els.resize.addEventListener( 'pointerdown', function ( e ) { self.startColResize( e ); } );
+			this.els.resize.addEventListener( 'pointerdown', function ( e ) {
+				if ( self.isFreePlaced( self.activeEl ) ) { e.stopPropagation(); self.startFreeDrag( e, self.activeEl, 'resize' ); return; }
+				self.startColResize( e );
+			} );
 			function on( sel, fn ) {
 				root.querySelector( sel ).addEventListener( 'click', function ( e ) {
 					e.preventDefault(); e.stopPropagation();
@@ -1923,7 +1933,19 @@
 				self.setHover( hit ? hit.el : null );
 			}, false );
 
+			// Freeform (7h): press and drag an item of a Freeform Div to place it.
+			document.addEventListener( 'pointerdown', function ( e ) {
+				if ( self.editing || e.button !== 0 || self.animating ) { return; }
+				if ( e.target.closest && e.target.closest( '#fw-le-overlay, .fw-le-ctxmenu' ) ) { return; }
+				var fel = self.freeItemFrom( e.target );
+				if ( fel ) { self.startFreeDrag( e, fel, 'move' ); }
+			}, { capture: true, passive: false } );
+			document.addEventListener( 'dragstart', function ( e ) {
+				if ( e.target && e.target.closest && e.target.closest( '.fw-free' ) ) { e.preventDefault(); }
+			}, true );
+
 			document.addEventListener( 'click', function ( e ) {
+				if ( self._freeNoClick ) { self._freeNoClick = false; e.preventDefault(); e.stopPropagation(); return; }
 				if ( self.editing ) { return; } // let clicks place the caret while editing
 				if ( e.target.closest && e.target.closest( '#fw-le-overlay' ) ) { return; }
 				// Editor chrome injected into the canvas (add-section / add-column
@@ -1951,6 +1973,10 @@
 				var k = ( e.key || '' ).toLowerCase();
 				if ( mod && k === 'k' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'k' } ); }
 				else if ( mod && k === 's' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 's' } ); }
+				else if ( ! inField && ! mod && ! e.altKey && /^Arrow(Up|Down|Left|Right)$/.test( e.key ) && self.isFreePlaced( self.activeEl ) ) {
+					e.preventDefault();
+					self.nudgeFree( e.key, e.shiftKey ? 10 : 1 );
+				}
 				else if ( ! inField ) {
 					if ( mod && k === 'z' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'z', shift: !! e.shiftKey } ); }
 					else if ( mod && k === 'y' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'y' } ); }
@@ -2152,12 +2178,29 @@
 				{ text: 'Copy as JSON', act: function () { self.toShell( 'copy-json-request', { id: id } ); } },
 				{ text: 'Paste JSON…', act: function () { self.toShell( 'paste-json-request', { id: id } ); } },
 				{ text: 'Check contrast', act: function () { self.toShell( 'check-contrast', { id: id } ); } },
+				{ text: 'Save as image…', act: function () { self.openImageExport( id ); } },
+				{ text: 'Comment…', act: function () { self.toShell( 'collab-comment', { id: id } ); } },
 				{ text: 'Note…', act: function () { self.toShell( 'edit-note', { id: id } ); } },
 				{ sep: true },
 				{ text: ( hidden ? 'Show on ' + dev : 'Hide on ' + dev ), act: function () { self.toggleHidden( id ); } }
 			];
 			if ( isSection || isColumn ) {
 				items.push( { text: 'Save as Template', act: function () { self.toShell( 'save-template-request', { id: id } ); } } );
+			}
+			// Freeform (7h): layer order of an item placed in a Freeform Div.
+			var fEl = document.querySelector( '[data-fw-item-id="' + id + '"]' );
+			if ( this.isFreePlaced( fEl ) ) {
+				items.push( { sep: true } );
+				items.push( { text: 'Bring to front', act: function () { self.freeLayer( fEl, 'front' ); } } );
+				items.push( { text: 'Bring forward', act: function () { self.freeLayer( fEl, 'up' ); } } );
+				items.push( { text: 'Send backward', act: function () { self.freeLayer( fEl, 'down' ); } } );
+				items.push( { text: 'Send to back', act: function () { self.freeLayer( fEl, 'back' ); } } );
+			}
+			// AI for layout (7e): a section or layout band gets AI proposals, previewed before anything is kept.
+			if ( this.aiReady && ( isSection || /^(flexbox|container|row)$/.test( meta.type || '' ) ) ) {
+				items.push( { sep: true } );
+				items.push( { text: 'Make responsive with AI…', act: function () { self.toShell( 'ai-layout', { id: id, kind: 'responsive' } ); } } );
+				items.push( { text: 'Design variations with AI…', act: function () { self.toShell( 'ai-layout', { id: id, kind: 'variations' } ); } } );
 			}
 			items.push( { sep: true } );
 			items.push( { text: 'Delete', key: 'Del', danger: true, act: function () { self.toShell( 'delete-request', { id: id, label: label } ); } } );
@@ -2207,6 +2250,138 @@
 				document.addEventListener( 'keydown', self._ctxKey, true );
 				window.addEventListener( 'scroll', self._ctxScroll = function () { self.closeContextMenu(); }, true );
 			}, 0 );
+		},
+
+		/* ---- save as image (roadmap 7f) ------------------------------------ */
+
+		/** Load the DOM-to-image library once, on first use. */
+		loadShotLib: function () {
+			if ( window.modernScreenshot ) { return Promise.resolve( window.modernScreenshot ); }
+			if ( this._shotLib ) { return this._shotLib; }
+			var cfg = window._fwLiveEditorFrame || {};
+			this._shotLib = new Promise( function ( resolve, reject ) {
+				if ( ! cfg.shotLib ) { reject( new Error( 'no library address' ) ); return; }
+				var s = document.createElement( 'script' );
+				s.src = cfg.shotLib;
+				s.onload = function () { window.modernScreenshot ? resolve( window.modernScreenshot ) : reject( new Error( 'library did not load' ) ); };
+				s.onerror = function () { reject( new Error( 'library did not load' ) ); };
+				document.head.appendChild( s );
+			} );
+			var self = this;
+			this._shotLib.catch( function () { self._shotLib = null; } );
+			return this._shotLib;
+		},
+
+		/** The colour actually behind an element: its own background, else the nearest ancestor's, else white. */
+		backdropOf: function ( el ) {
+			for ( var n = el; n && n.nodeType === 1; n = n.parentElement ) {
+				var c = getComputedStyle( n ).backgroundColor;
+				if ( c && c !== 'transparent' && ! /^rgba\(.*,\s*0\)$/.test( c ) ) { return c; }
+			}
+			return '#ffffff';
+		},
+
+		/** The small chooser: PNG at 1x / 2x / 3x or SVG, with or without the background. */
+		openImageExport: function ( id ) {
+			this.closeImageExport();
+			var self = this;
+			var el = document.querySelector( '[data-fw-item-id="' + id + '"]' );
+			if ( ! el ) { return; }
+			var meta = this.index[ id ] || {};
+			var box = document.createElement( 'div' );
+			box.className = 'fw-le-imgx';
+			box.setAttribute( 'role', 'dialog' );
+			box.setAttribute( 'aria-label', 'Save as image' );
+			box.innerHTML =
+				'<div class="fw-le-imgx__title">Save as image</div>' +
+				'<div class="fw-le-imgx__sub"></div>' +
+				'<div class="fw-le-imgx__row">' +
+					'<button type="button" data-fmt="png" data-scale="1">PNG 1x</button>' +
+					'<button type="button" data-fmt="png" data-scale="2" class="is-primary">PNG 2x</button>' +
+					'<button type="button" data-fmt="png" data-scale="3">PNG 3x</button>' +
+					'<button type="button" data-fmt="svg" data-scale="1">SVG</button>' +
+				'</div>' +
+				'<label class="fw-le-imgx__check"><input type="checkbox"> Transparent background</label>' +
+				'<div class="fw-le-imgx__status" aria-live="polite"></div>' +
+				'<button type="button" class="fw-le-imgx__close" aria-label="Close">&times;</button>';
+			var r = el.getBoundingClientRect();
+			box.querySelector( '.fw-le-imgx__sub' ).textContent = ( meta.label || 'Element' ) + ' · ' + Math.round( r.width ) + ' × ' + Math.round( r.height ) + ' px';
+			document.body.appendChild( box );
+			this.els.imgx = box;
+			box.addEventListener( 'click', function ( e ) {
+				var t = e.target.closest ? e.target.closest( 'button' ) : null;
+				if ( ! t ) { return; }
+				e.preventDefault(); e.stopPropagation();
+				if ( t.classList.contains( 'fw-le-imgx__close' ) ) { self.closeImageExport(); return; }
+				if ( t.getAttribute( 'data-fmt' ) ) {
+					self.saveAsImage( el, meta, t.getAttribute( 'data-fmt' ), parseInt( t.getAttribute( 'data-scale' ), 10 ) || 1, box.querySelector( 'input' ).checked );
+				}
+			} );
+			this._imgxKey = function ( e ) { if ( e.key === 'Escape' ) { self.closeImageExport(); } };
+			document.addEventListener( 'keydown', this._imgxKey, true );
+		},
+
+		closeImageExport: function () {
+			if ( this.els.imgx ) { this.els.imgx.remove(); this.els.imgx = null; }
+			if ( this._imgxKey ) { document.removeEventListener( 'keydown', this._imgxKey, true ); this._imgxKey = null; }
+		},
+
+		/**
+		 * Render the element to PNG (at 1-3x) or SVG and download it. The editor's own marks are kept out: its overlay
+		 * nodes are filtered, and the state classes it puts on page elements (an empty column's dashed box, a drag
+		 * placeholder) are taken off for the capture and put back after.
+		 */
+		saveAsImage: function ( el, meta, fmt, scale, transparent ) {
+			var self = this, box = this.els.imgx;
+			var status = box ? box.querySelector( '.fw-le-imgx__status' ) : null;
+			var say = function ( t ) { if ( status ) { status.textContent = t; } };
+			if ( box ) { box.classList.add( 'is-busy' ); }
+			say( 'Rendering…' );
+			var STATE = [ 'fw-le-empty-col', 'fw-le-collapsed', 'fw-le-nest-target', 'fw-le-editing', 'fw-le-dragging', 'fw-le-drag-placeholder', 'fw-le-selected', 'fw-le-hover' ];
+			var stripped = [];
+			var strip = function () {
+				// The editor's guide outlines and min-heights hang off these body classes: without them the element
+				// renders exactly as visitors see it.
+				[ 'fw-live-editor-frame-active', 'fw-le-wireframe' ].forEach( function ( c ) {
+					if ( document.body.classList.contains( c ) ) { document.body.classList.remove( c ); stripped.push( [ document.body, c ] ); }
+				} );
+				var nodes = [ el ].concat( Array.prototype.slice.call( el.querySelectorAll( '[class*="fw-le-"]' ) ) );
+				nodes.forEach( function ( n ) {
+					STATE.forEach( function ( c ) { if ( n.classList && n.classList.contains( c ) ) { n.classList.remove( c ); stripped.push( [ n, c ] ); } } );
+				} );
+			};
+			var restore = function () { stripped.forEach( function ( p ) { p[ 0 ].classList.add( p[ 1 ] ); } ); stripped = []; };
+			var bg = transparent ? null : this.backdropOf( el );
+			var name = ( String( meta.label || meta.type || 'element' ).toLowerCase().replace( /[^a-z0-9]+/g, '-' ).replace( /^-|-$/g, '' ) || 'element' ) +
+				( fmt === 'png' ? '@' + scale + 'x.png' : '.svg' );
+			this.loadShotLib().then( function ( lib ) {
+				strip();
+				var opts = {
+					scale: fmt === 'png' ? scale : 1,
+					backgroundColor: bg,
+					filter: function ( node ) {
+						if ( ! node || node.nodeType !== 1 ) { return true; }
+						var cls = typeof node.className === 'string' ? node.className : '';
+						// Editor UI (overlays, tags, add-buttons) has fw-le- classes and is not a page item.
+						return ! ( /(^|\s)fw-le-/.test( cls ) && ! node.hasAttribute( 'data-fw-item-id' ) );
+					}
+				};
+				return ( fmt === 'svg' ? lib.domToSvg( el, opts ) : lib.domToPng( el, opts ) );
+			} ).then( function ( url ) {
+				restore();
+				var a = document.createElement( 'a' );
+				a.href = url;
+				a.download = name;
+				document.body.appendChild( a );
+				a.click();
+				a.remove();
+				say( 'Saved ' + name );
+				if ( box ) { box.classList.remove( 'is-busy' ); }
+			} ).catch( function ( err ) {
+				restore();
+				say( 'Could not render this element' + ( err && err.message ? ': ' + err.message : '' ) + '.' );
+				if ( box ) { box.classList.remove( 'is-busy' ); }
+			} );
 		},
 
 		closeContextMenu: function () {
@@ -2271,6 +2446,231 @@
 			}
 		},
 
+		/* ---- Freeform (roadmap 7h) ----------------------------------------
+		 * A Freeform Div (.fw-free) places each child by CSS variables (--fw-x / --fw-w in % of the canvas,
+		 * --fw-y in px, --fw-z layer, --fw-o stacked order). Dragging sets them live; on release the box goes
+		 * to the shell ('free-boxes'), which stores it in the item's `free_box` att as one undo step. */
+
+		/** The Freeform canvas holding el directly, when it is placing freely (not stacked at this width). */
+		freeCanvasOf: function ( el ) {
+			var p = el && el.parentElement;
+			if ( ! p || ! p.classList || ! p.classList.contains( 'fw-free' ) ) { return null; }
+			return window.getComputedStyle( p ).display === 'flex' ? null : p;
+		},
+		isFreePlaced: function ( el ) {
+			return !! ( el && el.nodeType === 1 && el.hasAttribute( 'data-fw-item-id' ) && this.freeCanvasOf( el ) );
+		},
+		/** The freely placed item a press lands on: the selected one when the press is inside it, else the nearest. */
+		freeItemFrom: function ( target ) {
+			var c = [];
+			if ( this.activeEl && this.activeEl.contains( target ) ) { c.push( this.activeEl ); }
+			c.push( target );
+			for ( var i = 0; i < c.length; i++ ) {
+				for ( var el = c[ i ]; el && el !== document.body; el = el.parentElement ) {
+					if ( this.isFreePlaced( el ) ) { return el; }
+				}
+			}
+			return null;
+		},
+		/** The item's box now: {x %, y px, w %, z}. */
+		freeBoxOf: function ( el ) {
+			var p = el.parentElement, pr = p.getBoundingClientRect(), r = el.getBoundingClientRect();
+			var z = parseInt( el.style.getPropertyValue( '--fw-z' ), 10 );
+			return {
+				x: Math.round( ( r.left - pr.left ) / pr.width * 10000 ) / 100,
+				y: Math.round( r.top - pr.top ),
+				w: Math.round( r.width / pr.width * 10000 ) / 100,
+				z: isNaN( z ) ? 1 : z
+			};
+		},
+		applyFreeBox: function ( el, b ) {
+			el.classList.add( 'fw-free-item' );
+			el.style.setProperty( '--fw-x', b.x + '%' );
+			el.style.setProperty( '--fw-y', b.y + 'px' );
+			el.style.setProperty( '--fw-w', b.w + '%' );
+			el.style.setProperty( '--fw-z', String( b.z ) );
+			el.style.setProperty( '--fw-o', String( Math.max( 0, b.y ) * 100 + Math.max( 0, Math.min( 99, Math.round( b.x ) ) ) ) );
+		},
+		startFreeDrag: function ( e, el, mode ) {
+			var p = el.parentElement, self = this;
+			var pr = p.getBoundingClientRect(), r = el.getBoundingClientRect();
+			var sibs = [];
+			Array.prototype.forEach.call( p.children, function ( c ) {
+				if ( c !== el && c.hasAttribute && c.hasAttribute( 'data-fw-item-id' ) ) {
+					var q = c.getBoundingClientRect();
+					sibs.push( { l: q.left - pr.left, t: q.top - pr.top, w: q.width, h: q.height } );
+				}
+			} );
+			var d = this.freeDrag = {
+				el: el, id: el.getAttribute( 'data-fw-item-id' ), p: p, pr: pr, mode: mode, sibs: sibs,
+				sx: e.clientX, sy: e.clientY, l: r.left - pr.left, t: r.top - pr.top, w: r.width, h: r.height,
+				box: null, moved: false, z: this.freeBoxOf( el ).z
+			};
+			d.move = function ( ev ) { self.onFreeMove( ev ); };
+			d.up   = function ( ev ) { self.onFreeUp( ev ); };
+			window.addEventListener( 'pointermove', d.move, true );
+			window.addEventListener( 'pointerup', d.up, true );
+			window.addEventListener( 'pointercancel', d.up, true );
+			if ( mode === 'resize' ) { e.preventDefault(); }
+		},
+		onFreeMove: function ( e ) {
+			var d = this.freeDrag;
+			if ( ! d ) { return; }
+			var dx = e.clientX - d.sx, dy = e.clientY - d.sy;
+			if ( ! d.moved ) {
+				if ( Math.abs( dx ) + Math.abs( dy ) < 4 ) { return; }
+				d.moved = true;
+				document.documentElement.classList.add( 'fw-le-free-dragging' );
+				this.els.activeBox.style.display = 'none';
+				this.els.hoverBox.style.display = 'none';
+				this.els.resize.style.display = 'none';
+			}
+			e.preventDefault();
+			var W = d.pr.width, H = d.p.clientHeight, snap = ! e.altKey, T = 6, gx = null, gy = null;
+			var xs = [ 0, W / 2, W ], ys = [ 0, H / 2, H ];
+			d.sibs.forEach( function ( s ) { xs.push( s.l, s.l + s.w / 2, s.l + s.w ); ys.push( s.t, s.t + s.h / 2, s.t + s.h ); } );
+			var best = function ( edges, targets ) {
+				var m = null;
+				edges.forEach( function ( ed ) {
+					targets.forEach( function ( t ) {
+						var dd = t - ed;
+						if ( Math.abs( dd ) <= T && ( ! m || Math.abs( dd ) < Math.abs( m.d ) ) ) { m = { d: dd, at: t }; }
+					} );
+				} );
+				return m;
+			};
+			var l = d.l, t = d.t, w = d.w;
+			if ( d.mode === 'resize' ) {
+				w = Math.max( 24, d.w + dx );
+				if ( snap ) { var mr = best( [ l + w ], xs ); if ( mr ) { w += mr.d; gx = mr.at; } }
+			} else {
+				l = d.l + dx; t = d.t + dy;
+				if ( snap ) {
+					var mx = best( [ l, l + w / 2, l + w ], xs ); if ( mx ) { l += mx.d; gx = mx.at; }
+					var my = best( [ t, t + d.h / 2, t + d.h ], ys ); if ( my ) { t += my.d; gy = my.at; }
+				}
+			}
+			d.box = { x: Math.round( l / W * 10000 ) / 100, y: Math.round( t ), w: Math.round( w / W * 10000 ) / 100, z: d.z };
+			this.applyFreeBox( d.el, d.box );
+			this.showFreeGuides( d, gx, gy, e );
+		},
+		onFreeUp: function () {
+			var d = this.freeDrag;
+			if ( ! d ) { return; }
+			window.removeEventListener( 'pointermove', d.move, true );
+			window.removeEventListener( 'pointerup', d.up, true );
+			window.removeEventListener( 'pointercancel', d.up, true );
+			this.freeDrag = null;
+			document.documentElement.classList.remove( 'fw-le-free-dragging' );
+			this.showFreeGuides( null );
+			if ( ! d.moved || ! d.box ) { return; }
+			this._freeNoClick = true;
+			var self = this;
+			window.setTimeout( function () { self._freeNoClick = false; }, 400 );
+			this.toShell( 'free-boxes', { items: [ { id: d.id, box: d.box } ] } );
+			this.select( d.el, d.id );
+		},
+		/** Snap guides (a vertical and / or horizontal line across the canvas) and a position read-out. */
+		showFreeGuides: function ( d, gx, gy, e ) {
+			var root = this.els.root;
+			if ( ! this.els.fgx ) {
+				this.els.fgx = document.createElement( 'div' ); this.els.fgx.className = 'fw-le-free-guide fw-le-free-guide--v';
+				this.els.fgy = document.createElement( 'div' ); this.els.fgy.className = 'fw-le-free-guide fw-le-free-guide--h';
+				this.els.ftip = document.createElement( 'div' ); this.els.ftip.className = 'fw-le-free-tip';
+				root.appendChild( this.els.fgx ); root.appendChild( this.els.fgy ); root.appendChild( this.els.ftip );
+			}
+			var pr = d ? d.p.getBoundingClientRect() : null;
+			this.els.fgx.style.display = ( d && gx !== null ) ? 'block' : 'none';
+			this.els.fgy.style.display = ( d && gy !== null ) ? 'block' : 'none';
+			this.els.ftip.style.display = d ? 'block' : 'none';
+			if ( ! d ) { return; }
+			if ( gx !== null ) { this.els.fgx.style.left = ( pr.left + gx ) + 'px'; this.els.fgx.style.top = pr.top + 'px'; this.els.fgx.style.height = pr.height + 'px'; }
+			if ( gy !== null ) { this.els.fgy.style.top = ( pr.top + gy ) + 'px'; this.els.fgy.style.left = pr.left + 'px'; this.els.fgy.style.width = pr.width + 'px'; }
+			this.els.ftip.textContent = d.mode === 'resize' ? ( 'W ' + d.box.w + '%' ) : ( 'X ' + d.box.x + '%  Y ' + d.box.y + 'px' );
+			this.els.ftip.style.left = ( e.clientX + 14 ) + 'px';
+			this.els.ftip.style.top = ( e.clientY + 14 ) + 'px';
+		},
+		nudgeFree: function ( key, step ) {
+			var el = this.activeEl, b = this.freeBoxOf( el ), W = el.parentElement.getBoundingClientRect().width;
+			if ( key === 'ArrowLeft' ) { b.x = Math.round( ( b.x - step / W * 100 ) * 100 ) / 100; }
+			if ( key === 'ArrowRight' ) { b.x = Math.round( ( b.x + step / W * 100 ) * 100 ) / 100; }
+			if ( key === 'ArrowUp' ) { b.y -= step; }
+			if ( key === 'ArrowDown' ) { b.y += step; }
+			this.applyFreeBox( el, b );
+			this.placeActive( el );
+			var self = this, id = this.activeId;
+			// One undo step per burst of key presses.
+			window.clearTimeout( this._freeNudgeT );
+			this._freeNudgeT = window.setTimeout( function () { self.toShell( 'free-boxes', { items: [ { id: id, box: self.freeBoxOf( el ) } ] } ); }, 400 );
+		},
+		/** Layer order among the canvas's items: front / up / down / back. */
+		freeLayer: function ( el, how ) {
+			var self = this, p = el.parentElement;
+			var items = Array.prototype.filter.call( p.children, function ( c ) { return c.hasAttribute && c.hasAttribute( 'data-fw-item-id' ); } );
+			var dom = items.slice();
+			items.sort( function ( a, b ) { return self.freeBoxOf( a ).z - self.freeBoxOf( b ).z || ( dom.indexOf( a ) - dom.indexOf( b ) ); } );
+			var i = items.indexOf( el );
+			items.splice( i, 1 );
+			var to = how === 'front' ? items.length : how === 'back' ? 0 : how === 'up' ? Math.min( items.length, i + 1 ) : Math.max( 0, i - 1 );
+			items.splice( to, 0, el );
+			var out = [];
+			items.forEach( function ( c, n ) {
+				var b = self.freeBoxOf( c );
+				if ( b.z !== n + 1 || ! c.classList.contains( 'fw-free-item' ) ) {
+					b.z = n + 1;
+					self.applyFreeBox( c, b );
+					out.push( { id: c.getAttribute( 'data-fw-item-id' ), box: b } );
+				}
+			} );
+			if ( out.length ) { this.toShell( 'free-boxes', { items: out } ); }
+		},
+
+		/* ---- Working together (7i): comment pins + other people's selections ---- */
+		drawCollab: function () {
+			var self = this, root = this.els.root;
+			if ( ! root ) { return; }
+			if ( ! this._collabBound ) {
+				this._collabBound = true;
+				var redraw = function () { window.requestAnimationFrame( function () { self.drawCollab(); } ); };
+				window.addEventListener( 'scroll', redraw, true );
+				window.addEventListener( 'resize', redraw );
+				setInterval( redraw, 1500 ); // content that moves on its own (images loading, animations)
+			}
+			var layer = this.els.collab;
+			if ( ! layer ) {
+				layer = this.els.collab = document.createElement( 'div' );
+				layer.className = 'fw-le-collab';
+				root.appendChild( layer );
+			}
+			var html = '';
+			( this.collabUsers || [] ).forEach( function ( u ) {
+				var el = document.querySelector( '[data-fw-item-id="' + u.id + '"]' );
+				if ( ! el ) { return; }
+				var r = el.getBoundingClientRect();
+				if ( r.bottom < 0 || r.top > window.innerHeight ) { return; }
+				html += '<div class="fw-le-collab__sel" style="top:' + r.top + 'px;left:' + r.left + 'px;width:' + r.width + 'px;height:' + r.height + 'px;--c:' + u.color + '"><span>' + String( u.name ).replace( /[<>&"]/g, '' ) + '</span></div>';
+			} );
+			( this.collabPins || [] ).forEach( function ( p ) {
+				var el = document.querySelector( '[data-fw-item-id="' + p.id + '"]' );
+				if ( ! el ) { return; }
+				var r = el.getBoundingClientRect();
+				if ( r.bottom < 0 || r.top > window.innerHeight ) { return; }
+				html += '<span role="button" tabindex="0" class="fw-le-collab__pin" data-id="' + p.id + '" style="top:' + Math.max( 4, r.top - 12 ) + 'px;left:' + Math.max( 4, Math.min( window.innerWidth - 34, r.right - 16 ) ) + 'px" title="' + p.n + ' comment' + ( p.n === 1 ? '' : 's' ) + ' — click to open">' + p.n + '</span>';
+			} );
+			layer.innerHTML = html;
+			if ( ! layer._bound ) {
+				layer._bound = true;
+				layer.addEventListener( 'click', function ( e ) {
+					var b = e.target.closest( '.fw-le-collab__pin' );
+					if ( b ) { e.preventDefault(); e.stopPropagation(); self.toShell( 'collab-open-thread', { id: b.getAttribute( 'data-id' ) } ); }
+				} );
+				layer.addEventListener( 'keydown', function ( e ) {
+					var b = e.target.closest && e.target.closest( '.fw-le-collab__pin' );
+					if ( b && ( e.key === 'Enter' || e.key === ' ' ) ) { e.preventDefault(); self.toShell( 'collab-open-thread', { id: b.getAttribute( 'data-id' ) } ); }
+				} );
+			}
+		},
+
 		placeActive: function ( el ) {
 			var r = this.placeBox( this.els.activeBox, el );
 			this.els.activeBox.setAttribute( 'data-tag-below', r.top < 28 ? '1' : '0' );
@@ -2283,6 +2683,15 @@
 			var h = this.els.resize;
 			if ( ! h ) { return; }
 			var meta = this.activeId ? this.index[ this.activeId ] : null;
+			if ( this.activeEl && ! this.freeDrag && this.isFreePlaced( this.activeEl ) ) {
+				var rf = this.activeEl.getBoundingClientRect();
+				h.style.display = 'block';
+				h.title = 'Drag to change the width (Alt: no snapping)';
+				h.style.top  = ( rf.top + rf.height / 2 - 18 ) + 'px';
+				h.style.left = ( rf.right - 6 ) + 'px';
+				return;
+			}
+			h.title = 'Drag to resize (12-column grid)';
 			if ( ! this.activeEl || ! meta || meta.type !== 'column' || this.colResize ) {
 				h.style.display = 'none';
 				return;

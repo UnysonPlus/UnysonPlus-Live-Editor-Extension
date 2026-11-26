@@ -80,6 +80,10 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		// and on the wp-admin post-edit screen, so it is registered unconditionally.
 		add_action( 'admin_bar_menu', array( $this, '_action_admin_bar_menu' ), 90 );
 
+		// Working together (roadmap 7i): comments pinned to elements, presence, staging copies.
+		require_once dirname( __FILE__ ) . '/includes/class-fw-le-collab.php';
+		FW_LE_Collab::init( $this );
+
 		// The Asset Optimizer must stand down while the editor renders. Its UI is
 		// drawn by JavaScript after load, so none of the class names it styles are
 		// in the HTML the unused-CSS purge scans - the purge removes every one of
@@ -824,6 +828,16 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			true
 		);
 
+		// Working together (roadmap 7i): comments, presence, staging copies.
+		wp_enqueue_script(
+			'fw-live-editor-collab',
+			fw_min_uri( $this->get_declared_URI( '/static/js/live-editor-collab.js' ) ),
+			array( 'fw-live-editor' ),
+			$this->asset_ver( '/static/js/live-editor-collab.js' ),
+			true
+		);
+		wp_localize_script( 'fw-live-editor-collab', '_fwLeCollab', FW_LE_Collab::config( $post ) + array( 'moderate' => current_user_can( 'edit_others_posts' ) ) );
+
 		// The Animate workspace (Animation Creator A2): page timelines made in the Live Editor itself. Needs the
 		// Animation Engine (its runtime plays them and its page-timelines module stores them).
 		if ( function_exists( 'upw_page_timelines_save' ) ) {
@@ -1282,6 +1296,8 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		wp_localize_script( 'fw-live-editor-frame', '_fwLiveEditorFrame', array(
 			'postId'  => (int) get_queried_object_id(),
 			'version' => $this->manifest->get_version(),
+			// Save as image (roadmap 7f): the DOM-to-image library, loaded by the canvas only when someone exports.
+			'shotLib' => $this->get_declared_URI( '/static/vendor/modern-screenshot/modern-screenshot.js' ),
 			// Header/footer "Edit …" badge destinations (Theme Settings tab, or a
 			// Theme Builder part), each opened in a new browser tab.
 			'chrome'  => $this->chrome_edit_targets(),

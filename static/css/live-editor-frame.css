@@ -441,6 +441,55 @@ body.fw-live-editor-frame-active .fw-le-addcol-btn:hover {
 	background: #34363f;
 }
 
+/* Save as image (roadmap 7f): the small chooser, styled like the action menu. */
+.fw-le-imgx {
+	position: fixed;
+	z-index: 2147483646;
+	right: 20px;
+	bottom: 20px;
+	width: 300px;
+	padding: 14px 14px 12px;
+	background: #23252e;
+	border: 1px solid #3a3d48;
+	border-radius: 8px;
+	box-shadow: 0 10px 30px rgba( 0, 0, 0, .42 );
+	color: #e7e8ec;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	font-size: 13px;
+	line-height: 1.3;
+	-webkit-font-smoothing: antialiased;
+}
+.fw-le-imgx__title { font-weight: 600; font-size: 14px; margin-bottom: 2px; }
+.fw-le-imgx__sub { color: #868b97; font-size: 12px; margin-bottom: 10px; }
+.fw-le-imgx__row { display: grid; grid-template-columns: repeat( 4, 1fr ); gap: 6px; }
+.fw-le-imgx__row button {
+	padding: 7px 0;
+	border: 1px solid #3a3d48;
+	border-radius: 5px;
+	background: #2b2e38;
+	color: #e7e8ec;
+	font: inherit;
+	font-size: 12px;
+	cursor: pointer;
+}
+.fw-le-imgx__row button:hover { background: #343844; }
+.fw-le-imgx__row button.is-primary { background: #00b295; border-color: #00b295; color: #fff; }
+.fw-le-imgx__row button.is-primary:hover { background: #00a085; }
+.fw-le-imgx__check { display: flex; align-items: center; gap: 7px; margin-top: 10px; color: #c9ccd4; font-size: 12px; cursor: pointer; }
+.fw-le-imgx__status { min-height: 16px; margin-top: 8px; color: #8fd9c8; font-size: 12px; }
+.fw-le-imgx__close {
+	position: absolute;
+	top: 6px;
+	right: 8px;
+	border: 0;
+	background: transparent;
+	color: #868b97;
+	font-size: 18px;
+	line-height: 1;
+	cursor: pointer;
+}
+.fw-le-imgx.is-busy .fw-le-imgx__row button { opacity: .5; pointer-events: none; }
+
 /* Hide/Show eye while the item is hidden — accented so the state reads at a glance. */
 #fw-le-overlay .fw-le-tag__btn.is-on {
 	color: #ffd479;
@@ -690,3 +739,18 @@ html.fw-le-animating #fw-le-overlay .fw-le-resize,
 html.fw-le-animating .fw-le-addcol-zone,
 html.fw-le-animating .fw-le-add-section-zone { display: none !important; }
 html.fw-le-animating #fw-le-overlay .fw-le-box--active { outline-color: #2ad38b; }
+
+/* Freeform (7h): snap guides and the position read-out while dragging an item of a Freeform Div. */
+#fw-le-overlay .fw-le-free-guide { position: fixed; display: none; pointer-events: none; z-index: 2147483600; background: #ff3d8b; }
+#fw-le-overlay .fw-le-free-guide--v { width: 1px; }
+#fw-le-overlay .fw-le-free-guide--h { height: 1px; }
+#fw-le-overlay .fw-le-free-tip { position: fixed; display: none; pointer-events: none; z-index: 2147483601; background: #1e1f23; color: #fff; font: 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 5px 7px; border-radius: 4px; white-space: nowrap; }
+html.fw-le-free-dragging, html.fw-le-free-dragging * { user-select: none !important; cursor: move !important; }
+.fw-free > [data-fw-item-id] { cursor: move; }
+
+/* Working together (7i): other people's selections and comment pins. */
+#fw-le-overlay .fw-le-collab { position: fixed; inset: 0; pointer-events: none; }
+#fw-le-overlay .fw-le-collab__sel { position: fixed; box-sizing: border-box; border: 2px solid var(--c, #e5484d); border-radius: 2px; pointer-events: none; }
+#fw-le-overlay .fw-le-collab__sel span { position: absolute; left: -2px; bottom: 100%; background: var(--c, #e5484d); color: #fff; font: 600 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 3px 6px; border-radius: 3px 3px 0 0; white-space: nowrap; }
+#fw-le-overlay .fw-le-collab__pin { position: fixed; pointer-events: auto; display: inline-flex; align-items: center; justify-content: center; box-sizing: border-box; min-width: 26px; height: 26px; padding: 0 7px; margin: 0; border: 2px solid #fff; border-radius: 13px 13px 13px 3px; background: #f5a623; color: #1e1f23; font: 700 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+#fw-le-overlay .fw-le-collab__pin:focus-visible { outline: 2px solid #2f74e6; outline-offset: 2px; }

@@ -530,6 +530,16 @@
 				case 'ask-ai':
 					this.askAiAboutItem( data.payload && data.payload.id );
 					break;
+				case 'collab-comment':
+				case 'collab-open-thread':
+					if ( window.fwLeCollab ) { window.fwLeCollab.onFrame( data.type, data.payload ); }
+					break;
+				case 'free-boxes':
+					this.setFreeBoxes( data.payload && data.payload.items );
+					break;
+				case 'ai-layout':
+					this.aiLayout( data.payload && data.payload.id, data.payload && data.payload.kind );
+					break;
 				case 'quick-spacing':
 					this.openSpacingEditor( data.payload && data.payload.id );
 					break;
@@ -3205,6 +3215,143 @@
 		 *  context so "rewrite this", "make this a pill", etc. target exactly this
 		 *  item. Falls back to the plain panel (or a notice) on an older/absent AI
 		 *  Assistant. Also selects the item so the canvas + tree reflect the target. */
+		/** Freeform (7h): store boxes the canvas set by dragging / nudging / layering, as ONE undo step.
+		 *  The canvas already shows them, so nothing is re-rendered. */
+		setFreeBoxes: function ( items ) {
+			var self = this, todo = [];
+			( items || [] ).forEach( function ( it ) {
+				var node = it && self.nodeOf( it.id );
+				var b = it && it.box;
+				if ( node && b && isFinite( b.x ) && isFinite( b.y ) ) { todo.push( [ node, b ] ); }
+			} );
+			if ( ! todo.length ) { return; }
+			this.recordHistory();
+			todo.forEach( function ( t ) {
+				if ( ! t[ 0 ].atts || Array.isArray( t[ 0 ].atts ) ) { t[ 0 ].atts = {}; }
+				t[ 0 ].atts.free_box = JSON.stringify( { x: +t[ 1 ].x, y: Math.round( +t[ 1 ].y ), w: +t[ 1 ].w || 0, z: Math.max( 0, Math.round( +t[ 1 ].z || 1 ) ) } );
+			} );
+			this.markDirty();
+		},
+
+		/* AI for layout (7e). The AI proposes; each proposal is rendered into the canvas in place of the
+		 * section WITHOUT touching the model or the history, so nothing is kept until Keep. Keep = one
+		 * undo step; Cancel (or Esc) puts the original back. */
+		aiLayout: function ( id, kind ) {
+			var api = window.upwAiAssistant, self = this;
+			var node = this.nodeOf( id );
+			if ( ! node ) { return; }
+			if ( ! api || typeof api.proposeLayout !== 'function' ) {
+				notify( 'Update the AI Assistant extension to use AI layout proposals.', 'error' );
+				return;
+			}
+			if ( this._aiLay ) { this.aiLayoutClose( false ); }
+			kind = kind === 'variations' ? 'variations' : 'responsive';
+			var info   = this.index[ id ] || {};
+			var parent = info.parentId ? ( ( this.nodeOf( info.parentId ) || {} ).type || '' ) : '';
+			var orig   = JSON.parse( JSON.stringify( node ) );
+			var st = this._aiLay = { id: id, kind: kind, orig: orig, domId: id, list: [], pick: -1, device: this.device || 'desktop', seq: 0, done: false };
+
+			var $s = st.$el = $( '<div class="fw-le-ailay" role="dialog" aria-label="AI layout proposals">' +
+				'<div class="fw-le-ailay__head"><strong></strong><span class="fw-le-ailay__status"></span>' +
+				'<span class="fw-le-ailay__devs"></span><button type="button" class="fw-le-ailay__x" aria-label="Close">×</button></div>' +
+				'<div class="fw-le-ailay__cards"></div>' +
+				'<div class="fw-le-ailay__foot"><button type="button" class="button fw-le-ailay__cancel">Cancel</button>' +
+				'<button type="button" class="button button-primary fw-le-ailay__keep" disabled>Keep this one</button></div></div>' ).appendTo( 'body' );
+			$s.find( 'strong' ).text( kind === 'responsive' ? 'Make responsive' : 'Design variations' );
+			if ( kind === 'responsive' ) {
+				[ [ 'desktop', 'Desktop' ], [ 'tablet', 'Tablet' ], [ 'mobile', 'Phone' ] ].forEach( function ( d ) {
+					$( '<button type="button" class="fw-le-ailay__dev"></button>' ).attr( 'data-device', d[ 0 ] ).text( d[ 1 ] ).appendTo( $s.find( '.fw-le-ailay__devs' ) );
+				} );
+				this.setDevice( 'tablet' );
+			}
+			var mark = function () { $s.find( '.fw-le-ailay__dev' ).each( function () { this.classList.toggle( 'is-on', this.getAttribute( 'data-device' ) === self.device ); } ); };
+			mark();
+			$s.on( 'click', '.fw-le-ailay__dev', function () { self.setDevice( this.getAttribute( 'data-device' ) ); mark(); } );
+			$s.on( 'click', '.fw-le-ailay__x, .fw-le-ailay__cancel', function () { self.aiLayoutClose( false ); } );
+			$s.on( 'click', '.fw-le-ailay__keep', function () { self.aiLayoutClose( true ); } );
+			$s.on( 'click', '.fw-le-ailay__card', function () { self.aiLayoutPreview( +this.getAttribute( 'data-i' ) ); } );
+			$( document ).on( 'keydown.fwAiLay', function ( e ) { if ( e.key === 'Escape' ) { self.aiLayoutClose( false ); } } );
+
+			var status = function ( t ) { if ( self._aiLay === st ) { $s.find( '.fw-le-ailay__status' ).text( t ? t + '…' : '' ); } };
+			this.toFrame( 'select-item', { id: id, scroll: true } );
+			api.proposeLayout( kind, orig, parent, status ).then( function ( res ) {
+				if ( self._aiLay !== st ) { return; }
+				st.list = ( res && res.proposals ) || [];
+				var $c = $s.find( '.fw-le-ailay__cards' ).empty();
+				$( '<button type="button" class="fw-le-ailay__card is-on" data-i="-1"><b>Original</b><span>As it is now.</span></button>' ).appendTo( $c );
+				st.list.forEach( function ( p, i ) {
+					var $b = $( '<button type="button" class="fw-le-ailay__card"><b></b><span></span></button>' ).attr( 'data-i', i ).appendTo( $c );
+					$b.find( 'b' ).text( p.label ); $b.find( 'span' ).text( p.why || '' );
+				} );
+				var dropped = ( res && res.dropped ) || [];
+				status( '' );
+				$s.find( '.fw-le-ailay__status' ).text( st.list.length
+					? 'Click a proposal to preview it' + ( dropped.length ? ' (' + dropped.length + ' more did not pass the checks)' : '' ) + '.'
+					: 'No usable proposal this time' + ( dropped.length ? ': ' + dropped[ 0 ] : '.' ) + ' Try again, or ask in the AI panel.' );
+				if ( st.list.length ) { self.aiLayoutPreview( 0 ); }
+			}, function ( e ) {
+				if ( self._aiLay !== st ) { return; }
+				$s.find( '.fw-le-ailay__status' ).text( 'The AI could not answer: ' + ( ( e && e.message ) || 'unknown error' ) );
+			} );
+		},
+
+		/** Show proposal i (-1 = the original) on the canvas, in place of whatever is there now. */
+		aiLayoutPreview: function ( i ) {
+			var st = this._aiLay, self = this;
+			if ( ! st || ( i >= 0 && ! st.list[ i ] ) ) { return; }
+			var node = i < 0 ? st.orig : st.list[ i ].node;
+			var seq = ++st.seq;
+			st.$el.find( '.fw-le-ailay__card' ).removeClass( 'is-on' ).filter( '[data-i="' + i + '"]' ).addClass( 'is-on' );
+			st.$el.find( '.fw-le-ailay__keep' ).prop( 'disabled', i < 0 );
+			this.ajax( cfg.actions.renderItem, { item: JSON.stringify( node ) }, function ( resp ) {
+				if ( self._aiLay !== st || seq !== st.seq ) { return; } // a later click won
+				if ( resp && resp.success && resp.data && typeof resp.data.html === 'string' ) {
+					self.toFrame( 'replace', { id: st.domId, html: resp.data.html, styles: resp.data.styles } );
+					st.domId = ( node.atts && node.atts.unique_id ) || st.domId;
+					st.pick = i;
+				} else {
+					st.$el.find( '.fw-le-ailay__status' ).text( 'That proposal could not be drawn.' );
+				}
+			} );
+		},
+
+		/** Close the picker. keep = put the previewed proposal into the page as one undo step. */
+		aiLayoutClose: function ( keep ) {
+			var st = this._aiLay, self = this;
+			if ( ! st ) { return; }
+			this._aiLay = null;
+			st.seq++;
+			$( document ).off( 'keydown.fwAiLay' );
+			st.$el.remove();
+			var info = this.index[ st.id ];
+			if ( keep && st.pick >= 0 && info && info.siblings ) {
+				var nu  = JSON.parse( JSON.stringify( st.list[ st.pick ].node ) );
+				var at  = info.siblings.indexOf( info.node );
+				if ( at > -1 ) {
+					this.recordHistory();
+					info.siblings.splice( at, 1, nu );
+					this.rebuildIndex();
+					this.markDirty();
+					this.syncFrameModel();
+					this.refreshNavigator();
+					var nid = ( nu.atts && nu.atts.unique_id ) || st.id;
+					window.setTimeout( function () { self.toFrame( 'select-item', { id: nid } ); }, 300 );
+					notify( 'Layout kept. Undo (Ctrl+Z) puts the previous one back.', 'success' );
+					if ( st.kind === 'responsive' ) { this.setDevice( st.device ); }
+					return;
+				}
+			}
+			// Cancel: draw the original back where the preview is.
+			if ( st.domId !== st.id || st.pick >= 0 ) {
+				this.ajax( cfg.actions.renderItem, { item: JSON.stringify( st.orig ) }, function ( resp ) {
+					if ( resp && resp.success && resp.data ) {
+						self.toFrame( 'replace', { id: st.domId, html: resp.data.html, styles: resp.data.styles } );
+					}
+				} );
+			}
+			if ( st.kind === 'responsive' ) { this.setDevice( st.device ); }
+		},
+
 		askAiAboutItem: function ( id ) {
 			var api = window.upwAiAssistant;
 			if ( ! api || typeof api.openForElement !== 'function' ) {
@@ -4460,7 +4607,7 @@
 			var s = { x: num( 'x', 0 ), y: num( 'y', 0 ), sc: num( 'scale', 1 ), r: num( 'rotate', 0 ), op: num( 'opacity', 1 ), bl: num( 'blur', 0 ) };
 			if ( ! moreOn ) { return s; }
 			var cl = function ( v, a, b ) { return Math.max( a, Math.min( b, v ) ); };
-			[ [ 'w', 'width', 1600 ], [ 'h', 'height', 1200 ], [ 'rad', 'radius', 300 ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 0 ), 0, d[ 2 ] ); if ( v > 0 ) { s[ d[ 0 ] ] = v; } } );
+			[ [ 'wd', 'width', 1600 ], [ 'h', 'height', 1200 ], [ 'rad', 'radius', 300 ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 0 ), 0, d[ 2 ] ); if ( v > 0 ) { s[ d[ 0 ] ] = v; } } );
 			[ [ 'skx', 'skew_x', 60 ], [ 'sky', 'skew_y', 60 ], [ 'rx', 'rotate_x', 180 ], [ 'ry', 'rotate_y', 180 ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 0 ), -d[ 2 ], d[ 2 ] ); if ( v ) { s[ d[ 0 ] ] = v; } } );
 			[ [ 'bg', 'background' ], [ 'fg', 'color' ], [ 'bc', 'border_color' ] ].forEach( function ( d ) { var c = String( txt( d[ 1 ] ) || '' ).trim(); if ( c ) { s[ d[ 0 ] ] = c; } } );
 			[ [ 'br', 'brightness' ], [ 'ct', 'contrast' ], [ 'sa', 'saturate' ] ].forEach( function ( d ) { var v = cl( num( d[ 1 ], 100 ), 0, 300 ); if ( Math.abs( v - 100 ) > 0.01 ) { s[ d[ 0 ] ] = v; } } );
@@ -4477,7 +4624,7 @@
 			if ( s.sc !== 1 ) { k.scale = String( s.sc ); }
 			if ( s.r ) { k.rotate = s.r + 'deg'; }
 			if ( s.op !== 1 ) { k.opacity = String( s.op ); }
-			if ( s.w ) { k.width = s.w + 'px'; }
+			if ( s.wd ) { k.width = s.wd + 'px'; }
 			if ( s.h ) { k.height = s.h + 'px'; }
 			if ( s.rad ) { k.borderRadius = s.rad + 'px'; }
 			if ( s.bg ) { k.backgroundColor = s.bg; }
