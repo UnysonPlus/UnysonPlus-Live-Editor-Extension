@@ -4138,10 +4138,14 @@
 
 			var self = this;
 			var savedJson = JSON.stringify( this.model );
-			this.ajax( cfg.actions.save, { json: savedJson }, function ( resp ) {
+			// Anything else saved with the page (the Animate workspace's page timelines): one Save for both.
+			var data = { json: savedJson };
+			$.each( this.saveExtras || [], function ( i, fn ) { $.extend( data, fn() || {} ); } );
+			this.ajax( cfg.actions.save, data, function ( resp ) {
 				self.saving = false;
 				if ( resp && resp.success ) {
 					self.dirty = false;
+					$.each( self.afterSaveHooks || [], function ( i, fn ) { fn( resp ); } );
 					// The server cleared the recovery autosave; align our baseline so a
 					// fresh backup only fires after the NEXT change.
 					self.lastAutosaveJson = savedJson;
@@ -4203,12 +4207,13 @@
 			var $f = $( '#fw-le-preview-form' );
 			if ( ! $f.length ) {
 				$f = $( '<form id="fw-le-preview-form" method="post" target="fw-le-frame" style="display:none">' +
-					'<input type="hidden" name="json"><input type="hidden" name="nonce"><input type="hidden" name="focus"></form>' ).appendTo( 'body' );
+					'<input type="hidden" name="json"><input type="hidden" name="nonce"><input type="hidden" name="focus"><input type="hidden" name="scroll_tools"></form>' ).appendTo( 'body' );
 			}
 			$f.attr( 'action', cfg.previewUrl );
 			$f.find( '[name="json"]' ).val( JSON.stringify( this.model ) );
 			$f.find( '[name="nonce"]' ).val( cfg.nonce );
 			$f.find( '[name="focus"]' ).val( this.playId || '' );
+			$f.find( '[name="scroll_tools"]' ).val( this.scrollTools ? '1' : '' ); // Animate › Scroll tools (A5)
 			$f[ 0 ].submit();
 		},
 		/** Play the selected element: Preview, scrolled to it, so its entrance / scroll / hover motion plays
@@ -5043,6 +5048,9 @@
 		fwLiveEditor.init();
 	} );
 
+	fwLiveEditor.labelFor = labelFor; // the element names shown in the editor, for the add-on scripts (Animate)
+	// Narrow screens show some toolbar buttons as icons only (CSS): their label becomes the tooltip.
+	$( document ).on( 'mouseenter focus', '#fw-le-add, #fw-le-nav-btn, #fw-le-tpl-btn, #fw-le-hist-btn', function () { if ( ! this.title ) { this.title = $.trim( $( this ).text() ); } } );
 	window.fwLiveEditor = fwLiveEditor;
 
 } )( jQuery );

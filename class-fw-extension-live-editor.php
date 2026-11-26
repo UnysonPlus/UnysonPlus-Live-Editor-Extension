@@ -111,6 +111,7 @@ class FW_Extension_Live_Editor extends FW_Extension {
 		add_action( 'wp_ajax_fw_live_editor_new_flexbox', array( $this, '_ajax_new_flexbox' ) );
 		add_action( 'wp_ajax_fw_live_editor_render_page', array( $this, '_ajax_render_page' ) );
 		add_action( 'wp_ajax_fw_live_editor_save', array( $this, '_ajax_save' ) );
+		add_action( 'wp_ajax_fw_live_editor_timeline_presets', array( $this, '_ajax_timeline_presets' ) );
 		add_action( 'wp_ajax_fw_live_editor_autosave', array( $this, '_ajax_autosave' ) );
 		add_action( 'wp_ajax_fw_live_editor_revisions', array( $this, '_ajax_revisions' ) );
 		add_action( 'wp_ajax_fw_live_editor_revision_get', array( $this, '_ajax_revision_get' ) );
@@ -823,6 +824,18 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			true
 		);
 
+		// The Animate workspace (Animation Creator A2): page timelines made in the Live Editor itself. Needs the
+		// Animation Engine (its runtime plays them and its page-timelines module stores them).
+		if ( function_exists( 'upw_page_timelines_save' ) ) {
+			wp_enqueue_script(
+				'fw-live-editor-anim',
+				fw_min_uri( $this->get_declared_URI( '/static/js/live-editor-anim.js' ) ),
+				array( 'fw-live-editor' ),
+				$this->asset_ver( '/static/js/live-editor-anim.js' ),
+				true
+			);
+		}
+
 		$builder_data = fw_get_db_post_option( $post->ID, $this->pb()->get_option_key() );
 
 		// Belt-and-braces for the icon picker inside the shell: guarantee
@@ -932,6 +945,30 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			),
 			// Every curve of the shared easing picker as its CSS timing function (springs as linear()), so the
 			// Interaction timeline and the States preview play the curve the page will.
+			// Saved Interactions (Animation Engine 6g): the Interaction timeline's "Save as preset".
+			'ixPresetNonce' => function_exists( 'upw_ix_preset_save' ) ? wp_create_nonce( 'upw_ix_presets' ) : '',
+			// The Animate workspace (Animation Creator A2): this page's address and title (file names, exports),
+			// its saved page timelines, and the shared curve list.
+			'pageUrl'       => get_permalink( $post->ID ),
+			'pageTitle'     => wp_strip_all_tags( get_the_title( $post->ID ) ),
+			'pageTimelines' => function_exists( 'upw_page_timelines_get' ) ? upw_page_timelines_get( $post->ID ) : array(),
+			'canTimelines'  => function_exists( 'upw_page_timelines_save' ),
+			// Site-wide timelines (5h) for people who may change the whole site, and the motion presets (5g).
+			'canSite'       => function_exists( 'upw_site_timelines_save' ) && current_user_can( 'edit_theme_options' ),
+			'siteTimelines' => function_exists( 'upw_site_timelines_get' ) && current_user_can( 'edit_theme_options' ) ? upw_site_timelines_get() : array(),
+			'timelinePresets' => function_exists( 'upw_timeline_presets_get' ) ? upw_timeline_presets_get() : array(),
+			// The shared curve list (Animation Engine 5a) for Animate's keyframe curves: key, name, group.
+			'animCurves'    => ( function () {
+				$out = array();
+				if ( function_exists( 'sc_easing_defs' ) ) {
+					foreach ( sc_easing_defs() as $k => $d ) {
+						if ( 'default' !== $k && ! empty( $d['css'] ) && ( empty( $d['group'] ) || 'Steps' !== $d['group'] ) ) {
+							$out[] = array( 'key' => $k, 'label' => (string) $d['label'], 'group' => (string) $d['group'] );
+						}
+					}
+				}
+				return $out;
+			} )(),
 			'easeCss'  => ( function () {
 				$out = array( 'out' => 'cubic-bezier(.22,1,.36,1)', 'inout' => 'cubic-bezier(.65,0,.35,1)', 'in' => 'cubic-bezier(.64,0,.78,0)', 'back' => 'cubic-bezier(.34,1.56,.64,1)', 'linear' => 'linear' );
 				if ( function_exists( 'sc_easing_defs' ) ) {
@@ -1228,6 +1265,20 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			true
 		);
 
+		// Page timelines (Animation Creator): the visitor runtime plays them on the canvas while Kinetic Scenes
+		// authors them (Animate), so what you see while editing is what visitors get.
+		$ae = function_exists( 'fw_ext' ) ? fw_ext( 'animation-engine' ) : null;
+		if ( $ae && file_exists( $ae->get_path( '/modules/page-timelines/static/js/upw-timeline.js' ) ) ) {
+			wp_enqueue_script(
+				'upw-timeline',
+				fw_min_uri( $ae->get_declared_URI( '/modules/page-timelines/static/js/upw-timeline.js' ) ),
+				// Its curves come from the engine's one easing set (window.upwEase) in the shared frame scheduler.
+				function_exists( 'upw_anim_raf_handle' ) ? array( upw_anim_raf_handle() ) : array(),
+				(string) @filemtime( $ae->get_path( '/modules/page-timelines/static/js/upw-timeline.js' ) ),
+				true
+			);
+		}
+
 		wp_localize_script( 'fw-live-editor-frame', '_fwLiveEditorFrame', array(
 			'postId'  => (int) get_queried_object_id(),
 			'version' => $this->manifest->get_version(),
@@ -1432,6 +1483,27 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			$attr['data-fw-le-focus'] = '1';
 		}
 		return $attr;
+	}
+
+	/**
+	 * Is this request the Live Editor (its screen, its Edit canvas or its Preview canvas)? Tools that attach themselves to
+	 * the front end for logged-in admins (the Scroll Ruler, the Scroll Timeline, the chat bubble) stay off it:
+	 * use fw_live_editor_is_canvas(). Reliable from the `wp` action on.
+	 *
+	 * @return bool
+	 */
+	public function is_canvas_request() {
+		return $this->is_frame_request() || $this->is_motion_preview_request() || $this->is_boot_request();
+	}
+
+	/**
+	 * The Preview canvas, opened with Animate › Scroll tools: the only place the Scroll Ruler and the Scroll Timeline
+	 * load (Animation Creator A5). Use fw_live_editor_scroll_tools().
+	 *
+	 * @return bool
+	 */
+	public function is_scroll_tools_request() {
+		return $this->is_motion_preview_request() && '1' === (string) FW_Request::POST( 'scroll_tools' );
 	}
 
 	/** @return bool */
@@ -2225,13 +2297,55 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			'builder_active' => $active,
 		) );
 
+		// Page timelines (the Animate workspace) save with the page: one Save for both. Sent only when they changed.
+		$timelines = null;
+		if ( null !== FW_Request::POST( 'timelines' ) && function_exists( 'upw_page_timelines_save' ) ) {
+			$list = json_decode( (string) FW_Request::POST( 'timelines' ), true ); // FW_Request has unslashed it
+			if ( is_array( $list ) ) {
+				$timelines = upw_page_timelines_save( $post_id, $list );
+				if ( is_wp_error( $timelines ) ) {
+					wp_send_json_error( array( 'message' => $timelines->get_error_message() ) );
+				}
+			}
+		}
+
+		// Site-wide timelines (5h) ride on the same Save, for people who may change the whole site.
+		$site_timelines = null;
+		if ( null !== FW_Request::POST( 'site_timelines' ) && function_exists( 'upw_site_timelines_save' ) && current_user_can( 'edit_theme_options' ) ) {
+			$list = json_decode( (string) FW_Request::POST( 'site_timelines' ), true );
+			if ( is_array( $list ) ) {
+				$site_timelines = upw_site_timelines_save( $list );
+				if ( is_wp_error( $site_timelines ) ) {
+					wp_send_json_error( array( 'message' => $site_timelines->get_error_message() ) );
+				}
+			}
+		}
+
 		// A real save supersedes any recovery autosave.
 		delete_post_meta( $post_id, self::AUTOSAVE_META );
 
 		// Snapshot this save into the revision history.
 		$this->store_revision( $post_id, $json );
 
-		wp_send_json_success( array( 'saved' => true ) );
+		wp_send_json_success( array( 'saved' => true, 'timelines' => $timelines, 'site_timelines' => $site_timelines ) );
+	}
+
+	/**
+	 * Animate › motion presets (Animation Creator 5g): the site's library of saved moves, stored at once (a library,
+	 * not part of the page). POST presets = the whole list as JSON; answers with the list as stored.
+	 *
+	 * @internal
+	 */
+	public function _ajax_timeline_presets() {
+		$this->verify_ajax();
+		if ( ! function_exists( 'upw_timeline_presets_save' ) || ! current_user_can( 'edit_posts' ) ) {
+			wp_send_json_error( array( 'message' => __( 'Permission denied.', 'fw' ) ), 403 );
+		}
+		$list = json_decode( (string) FW_Request::POST( 'presets' ), true );
+		if ( ! is_array( $list ) ) {
+			wp_send_json_error( array( 'message' => __( 'Invalid preset data.', 'fw' ) ) );
+		}
+		wp_send_json_success( array( 'presets' => upw_timeline_presets_save( $list ) ) );
 	}
 
 	/**
@@ -2895,4 +3009,30 @@ class FW_Extension_Live_Editor extends FW_Extension {
 			. '})();</script>';
 	}
 
+}
+
+if ( ! function_exists( 'fw_live_editor_is_canvas' ) ) {
+	/**
+	 * Whether this request renders the Live Editor: its screen or its canvas (Edit or Preview). Floating front-end tools (the Scroll
+	 * Ruler, the Scroll Timeline, the chat bubble) check it and stay off the canvas. False when the Live Editor is off.
+	 *
+	 * @return bool
+	 */
+	function fw_live_editor_is_canvas() {
+		$le = function_exists( 'fw_ext' ) ? fw_ext( 'live-editor' ) : null;
+		return $le && method_exists( $le, 'is_canvas_request' ) && $le->is_canvas_request();
+	}
+}
+
+if ( ! function_exists( 'fw_live_editor_scroll_tools' ) ) {
+	/**
+	 * Whether this request is the Live Editor's Preview canvas opened with Animate › Scroll tools: the one place the
+	 * Scroll Ruler and the Scroll Timeline load (Animation Creator A5). False when the Live Editor is off.
+	 *
+	 * @return bool
+	 */
+	function fw_live_editor_scroll_tools() {
+		$le = function_exists( 'fw_ext' ) ? fw_ext( 'live-editor' ) : null;
+		return $le && method_exists( $le, 'is_scroll_tools_request' ) && $le->is_scroll_tools_request();
+	}
 }

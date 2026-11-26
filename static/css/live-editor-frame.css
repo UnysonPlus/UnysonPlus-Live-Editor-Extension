@@ -683,3 +683,10 @@ body.fw-le-wireframe [data-fw-le-wf="el"] {
 	opacity: 1 !important;
 	pointer-events: auto !important;
 }
+
+/* Animate workspace (Animation Creator A2): the selection only selects. */
+html.fw-le-animating #fw-le-overlay .fw-le-tag__btn:not(.fw-le-act-parent),
+html.fw-le-animating #fw-le-overlay .fw-le-resize,
+html.fw-le-animating .fw-le-addcol-zone,
+html.fw-le-animating .fw-le-add-section-zone { display: none !important; }
+html.fw-le-animating #fw-le-overlay .fw-le-box--active { outline-color: #2ad38b; }

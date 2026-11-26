@@ -2297,3 +2297,107 @@ body.fw-le-ixtl-open .upw-sruler-btn, body.fw-le-ixtl-open .upw-stl-btn { displa
 .fw-le-ixtl-btn { position: absolute; top: 12px; right: 16px; z-index: 21; display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 999px; border: 0; background: #23252e; color: #fff; font: 600 12px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow: 0 6px 18px rgba(0,0,0,.3); cursor: pointer; }
 .fw-le-ixtl-btn .dashicons { font-size: 16px; width: 16px; height: 16px; }
 .fw-le-ixtl-btn:hover { background: #2f323c; }
+
+/* ==========================================================================
+ * The Animate workspace (Animation Creator A2): Design / Animate switch, the timeline bar, the side panel on the
+ * right and the timeline docked under the canvas. In Animate, the Design tools step aside.
+ * ========================================================================== */
+.fw-le-workspace { margin-right: 10px; }
+.fw-le-anim-bar { display: none; align-items: center; gap: 6px; }
+body.fw-le-anim .fw-le-anim-bar { display: inline-flex; }
+body.fw-le-anim #fw-le-modes,
+body.fw-le-anim #fw-le-ixtl-btn,
+body.fw-le-anim #fw-le-add,
+body.fw-le-anim #fw-le-tpl-btn,
+body.fw-le-anim #fw-le-hist-btn,
+body.fw-le-anim #fw-le-ixtl,
+body.fw-le-anim #fw-le-panel,
+body.fw-le-anim #fw-le-templates,
+body.fw-le-anim #fw-le-history { display: none !important; }
+.fw-le-anim-bar select { height: 30px; max-width: 190px; font: 600 13px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #2f323c; color: #fff; border: 1px solid #3c3f4a; border-radius: 6px; padding: 0 8px; }
+.fw-le-anim-bar .fw-le-btn { height: 30px; padding: 0 8px; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.fw-le-anim-bar__play { background: #00b295 !important; border-color: #00b295 !important; color: #fff !important; min-width: 34px; justify-content: center; }
+.fw-le-anim-bar__play[disabled] { opacity: .45; }
+.fw-le-anim-bar__preview.is-on { background: #2ad38b !important; color: #10231c !important; }
+.fw-le-anim-bar__time { min-width: 92px; text-align: center; font-variant-numeric: tabular-nums; color: #fff; font-size: 12px; }
+.fw-le-anim-bar__sep { width: 1px; height: 20px; background: #3c3f4a; margin: 0 2px; }
+
+body.fw-le-anim { --anim-panel: 300px; --anim-dock: 230px; }
+body.fw-le-anim.fw-le-anim-dock-min { --anim-dock: 40px; }
+body.fw-le-anim #fw-le-canvas { padding-right: var(--anim-panel); padding-bottom: var(--anim-dock); box-sizing: border-box; }
+
+.fw-le-anim-panel, .fw-le-anim-dock { display: none; background: #23252e; color: #dfe1e8; font: 12px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+body.fw-le-anim .fw-le-anim-panel { display: block; position: fixed; top: 48px; right: 0; bottom: 0; width: var(--anim-panel); border-left: 1px solid #34363f; overflow: auto; padding: 0 14px 16px; z-index: 6; box-sizing: border-box; }
+.fw-le-anim-panel__head { position: sticky; top: 0; background: #23252e; padding: 12px 0 8px; margin-bottom: 4px; border-bottom: 1px solid #34363f; z-index: 1; }
+.fw-le-anim-panel__head strong { display: block; color: #fff; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fw-le-anim-link { background: none; border: 0; padding: 0 0 4px; color: #2ad38b; cursor: pointer; font: inherit; }
+.fw-le-anim-field { display: block; margin: 10px 0; }
+.fw-le-anim-field > span { display: block; color: #a3a7b4; margin-bottom: 4px; }
+.fw-le-anim-field em { display: block; font-style: normal; color: #8b8f9c; margin-top: 4px; }
+.fw-le-anim-panel input[type=text], .fw-le-anim-panel input[type=number], .fw-le-anim-panel select { width: 100%; box-sizing: border-box; height: 30px; background: #1c1e25; color: #fff; border: 1px solid #3c3f4a; border-radius: 6px; padding: 0 8px; }
+.fw-le-anim-checks { display: grid; gap: 6px; margin: 10px 0; }
+.fw-le-anim-check, .fw-le-anim-devices label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.fw-le-anim-devices { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 12px 0; padding: 8px 10px; border: 1px solid #34363f; border-radius: 6px; }
+.fw-le-anim-devices legend { padding: 0 4px; color: #a3a7b4; }
+.fw-le-anim-note { color: #a3a7b4; margin: 10px 0; }
+.fw-le-anim-note.is-warn { color: #ffb547; }
+.fw-le-anim-sub { color: #fff; margin: 8px 0; font-weight: 600; }
+.fw-le-anim-prop { display: grid; grid-template-columns: 1fr 96px 18px; align-items: center; gap: 8px; margin: 6px 0; }
+.fw-le-anim-prop span { color: #c7cad3; }
+.fw-le-anim-prop.is-keyed span { color: #2ad38b; }
+.fw-le-anim-prop i { font-style: normal; color: #8b8f9c; }
+.fw-le-anim-keys { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.fw-le-anim-keys button { background: #2f323c; color: #dfe1e8; border: 1px solid #3c3f4a; border-radius: 6px; padding: 3px 8px; cursor: pointer; font: inherit; }
+.fw-le-anim-wide { width: 100%; justify-content: center; margin: 10px 0 4px; }
+.fw-le-anim-danger { width: 100%; justify-content: center; margin-top: 14px; color: #ff8b98 !important; }
+.fw-le-anim-away { margin: 12px 0; padding: 8px; border: 1px dashed #ffb547; border-radius: 6px; display: grid; gap: 6px; }
+.fw-le-anim-away > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fw-le-anim-io summary { cursor: pointer; color: #fff; font-weight: 600; margin: 12px 0 6px; }
+.fw-le-anim-io__row { display: flex; flex-wrap: wrap; gap: 6px; }
+.fw-le-anim-curve { display: block; width: 100%; height: auto; background: #1c1e25; border-radius: 6px; margin: 4px 0; }
+
+body.fw-le-anim .fw-le-anim-dock { display: flex; flex-direction: column; position: fixed; bottom: 0; left: 0; right: var(--anim-panel); height: var(--anim-dock); border-top: 1px solid #34363f; z-index: 6; box-shadow: 0 -8px 24px rgba(0,0,0,.25); box-sizing: border-box; }
+body.fw-le-anim.fw-le-nav-open .fw-le-anim-dock { left: 280px; }
+.fw-le-anim-dock__head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #34363f; flex: 0 0 auto; }
+.fw-le-anim-dock__head strong { color: #fff; }
+.fw-le-anim-dock__trig { color: #2ad38b; }
+.fw-le-anim-dock__tools { margin-left: auto; display: inline-flex; gap: 4px; }
+.fw-le-anim-dock__tools button { background: #2f323c; color: #dfe1e8; border: 1px solid #3c3f4a; border-radius: 6px; min-width: 26px; height: 24px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; }
+body.fw-le-anim-dock-min .fw-le-anim-dock__tools [data-collapse] .dashicons { transform: rotate(180deg); }
+.fw-le-anim-dock__scroll { flex: 1 1 auto; overflow: auto; }
+.fw-le-anim-dock__inner { position: relative; min-width: calc(200px + (100% - 200px) * var(--z, 1)); padding: 0 12px 10px; box-sizing: border-box; }
+.fw-le-anim-dock__row { display: grid; grid-template-columns: 188px 1fr; align-items: center; min-height: 30px; border-top: 1px solid #2c2f38; }
+.fw-le-anim-dock__row.is-sel .fw-le-anim-dock__lbl { color: #2ad38b; }
+.fw-le-anim-dock__row.is-sel .fw-le-anim-dock__lane { background: #20322e; }
+.fw-le-anim-dock__row.is-away .fw-le-anim-dock__lbl { color: #ffb547; }
+.fw-le-anim-dock__axis { border-top: 0; position: sticky; top: 0; background: #23252e; z-index: 2; }
+.fw-le-anim-dock__lbl { padding-right: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; color: #dfe1e8; }
+.fw-le-anim-dock__lane { position: relative; height: 22px; background: #1c1e25; border-radius: 4px; cursor: text; }
+.fw-le-anim-dock__ruler { height: 24px; background: none; border-bottom: 1px solid #3c3f4a; border-radius: 0; cursor: col-resize; }
+.fw-le-anim-dock__ruler i { position: absolute; bottom: 0; width: 1px; height: 6px; background: #5a5e6b; }
+.fw-le-anim-dock__ruler i::after { content: attr(data-t); position: absolute; bottom: 8px; left: 3px; color: #8b8f9c; font-size: 10px; font-style: normal; white-space: nowrap; }
+.fw-le-anim-dock__bar { position: absolute; top: 9px; height: 4px; background: rgba(42,211,139,.45); border-radius: 2px; pointer-events: none; }
+.fw-le-anim-dock__kf { position: absolute; top: 50%; width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; background: #dfe1e8; transform: rotate(45deg); border-radius: 2px; cursor: grab; z-index: 1; }
+.fw-le-anim-dock__kf:hover { background: #fff; }
+.fw-le-anim-dock__kf.is-on { background: #2ad38b; box-shadow: 0 0 0 2px #10231c, 0 0 0 3px #2ad38b; }
+.fw-le-anim-dock__playhead { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: #ff5d73; pointer-events: none; z-index: 3; }
+.fw-le-anim-dock__empty { color: #a3a7b4; padding: 14px 0; margin: 0; }
+.fw-le-anim-dock__ghost { position: absolute; top: 9px; height: 4px; background: rgba(42,211,139,.18); border-radius: 2px; pointer-events: none; }
+.fw-le-anim-presets { margin: 12px 0; padding-top: 10px; border-top: 1px solid #34363f; }
+.fw-le-anim-site { margin: 12px 0 0; font-weight: 600; color: #fff; }
+.fw-le-anim-bar__tl { transition: box-shadow .3s ease, border-color .3s ease; }
+.fw-le-anim-bar__tl.is-followed { border-color: #2ad38b !important; box-shadow: 0 0 0 3px rgba(42,211,139,.35); }
+body.fw-le-anim .fw-le-breadcrumb { display: none !important; }
+/* Animate keeps the toolbar to what it needs; and both workspaces fit a 1366 px laptop. */
+body.fw-le-anim .fw-le-zoom,
+body.fw-le-anim #fw-le-status,
+body.fw-le-anim #fw-le-backend,
+body.fw-le-anim #fw-le-preview { display: none !important; }
+@media (max-width: 1500px) {
+	#fw-le-modes .fw-le-mode__lbl { display: none; }
+	.fw-le-doc-title { display: none; }
+	.fw-le-anim-bar__preview .fw-le-anim-bar__lbl { display: none; }
+	.fw-le-anim-bar select { max-width: 150px; }
+	#fw-le-add, #fw-le-nav-btn, #fw-le-tpl-btn, #fw-le-hist-btn { font-size: 0; gap: 0; }
+	#fw-le-add .dashicons, #fw-le-nav-btn .dashicons, #fw-le-tpl-btn .dashicons, #fw-le-hist-btn .dashicons { font-size: 18px; }
+}

@@ -371,6 +371,13 @@
 				this.applyBoxModel( data.payload && data.payload.on );
 			} else if ( data.type === 'reflow' ) {
 				this.reposition();
+			} else if ( data.type === 'upw-timeline' ) {
+				// Page timelines (the Animate workspace): played by the visitor runtime.
+				if ( window.upwTimeline ) { window.upwTimeline.command( data.payload ); }
+			} else if ( data.type === 'set-animate' ) {
+				// Animate workspace: clicks only select; no inline editing, dragging, deleting or element buttons.
+				this.animating = !! ( data.payload && data.payload.on );
+				document.documentElement.classList.toggle( 'fw-le-animating', this.animating );
 			} else if ( data.type === 'select-item' ) {
 				this.focusItem( data.payload && data.payload.id, ! data.payload || data.payload.scroll !== false );
 			} else if ( data.type === 'hover-item' ) {
@@ -536,7 +543,7 @@
 		/* ---- inline text editing (double-click) ------------------------ */
 
 		onDblClick: function ( e ) {
-			if ( this.editing ) { return; }
+			if ( this.editing || this.animating ) { return; }
 			var hit = this.selectableFrom( e.target );
 			if ( ! hit ) { return; }
 			var meta = this.index[ hit.id ];
@@ -745,7 +752,7 @@
 		/* ---- drag to reorder (Phase B) --------------------------------- */
 
 		startDrag: function ( e ) {
-			if ( ! this.activeEl ) { return; }
+			if ( ! this.activeEl || this.animating ) { return; }
 			e.preventDefault();
 			e.stopPropagation();
 
@@ -1949,6 +1956,8 @@
 					else if ( mod && k === 'y' ) { e.preventDefault(); self.toShell( 'shortcut', { key: 'y' } ); }
 					else if ( ! mod && e.key === '?' ) { e.preventDefault(); self.toShell( 'shortcut', { key: '?' } ); }
 					else if ( e.altKey && ( e.key === 'ArrowUp' || e.key === 'ArrowDown' ) ) { e.preventDefault(); self.toShell( 'shortcut', { key: e.key === 'ArrowUp' ? 'nudge-up' : 'nudge-down' } ); }
+					// Animate: K adds a keyframe, Space plays (the shell's Animate workspace handles them).
+					else if ( self.animating && ! mod && ! e.altKey && ( k === 'k' || e.key === ' ' ) ) { e.preventDefault(); self.toShell( 'shortcut', { key: k === 'k' ? 'anim-key' : 'anim-play' } ); }
 				}
 			}, false );
 
@@ -1967,7 +1976,7 @@
 				var hit = self.selectableFrom( e.target );
 				if ( ! hit ) { return true; }
 				self.select( hit.el, hit.id );
-				self.openContextMenu( hit.id, e.clientX, e.clientY );
+				if ( ! self.animating ) { self.openContextMenu( hit.id, e.clientX, e.clientY ); }
 				if ( e.preventDefault ) { e.preventDefault(); }
 				return false;
 			};
@@ -1998,7 +2007,7 @@
 					return;
 				}
 				// Delete / Backspace — remove the selected item (not while in a field).
-				if ( ( key === 'Delete' || key === 'Backspace' ) && self.activeId && ! inField ) {
+				if ( ( key === 'Delete' || key === 'Backspace' ) && self.activeId && ! inField && ! self.animating ) {
 					e.preventDefault();
 					var label = ( self.index[ self.activeId ] && self.index[ self.activeId ].label ) || 'item';
 					self.toShell( 'delete-request', { id: self.activeId, label: label } );

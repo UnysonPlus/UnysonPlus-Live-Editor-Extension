@@ -20,7 +20,7 @@
 	var L = function ( k, d ) { return ( cfg.l10n && cfg.l10n[ k ] ) || d; };
 
 	var EASE = { out: 'cubic-bezier(.22,1,.36,1)', inout: 'cubic-bezier(.65,0,.35,1)', 'in': 'cubic-bezier(.64,0,.78,0)', back: 'cubic-bezier(.34,1.56,.64,1)', linear: 'linear' };
-	var TRIG = { hover: 'On hover', click: 'On click', load: 'On page load', view: 'In view', past: 'Scrolled past' };
+	var TRIG = { hover: 'On hover', click: 'On click', load: 'On page load', start: 'Page starts loading', view: 'In view', past: 'Scrolled past', mouse: 'Mouse move', component: 'Component event' };
 	var KEYS = [ 'upw_interactions', 'upw_interactions__2' ];
 	var SNAP = 0.05;
 
@@ -153,6 +153,24 @@
 			$( '<button type="button" class="fw-le-ixtl__play"><span class="dashicons dashicons-controls-play"></span>' + L( 'tlPlay', 'Play' ) + '</button>' ).on( 'click', function () { self.play(); } ).appendTo( $ctl );
 			$( '<button type="button" class="fw-le-ixtl__reset" title="Back to the start"><span class="dashicons dashicons-controls-skipback"></span></button>' ).on( 'click', function () { self.seek( 0 ); } ).appendTo( $ctl );
 			this.$time = $( '<span class="fw-le-ixtl__time">0.00 s</span>' ).appendTo( $ctl );
+			// Save this Interaction as a preset (Animation Engine 6g): reusable on any element, live-linked.
+			if ( cfg.ixPresetNonce ) {
+				$( '<button type="button" class="fw-le-ixtl__save"><span class="dashicons dashicons-saved"></span>' + L( 'tlSave', 'Save as preset' ) + '</button>' )
+					.attr( 'title', L( 'tlSaveTip', 'Save this Interaction to reuse on any element (Interactions → A saved Interaction). The same name again updates it everywhere.' ) )
+					.on( 'click', function () {
+						var $b = $( this ), node = app.nodeOf( self.id ), v = node && node.atts && node.atts[ self.key ];
+						if ( ! v ) { return; }
+						var name = window.prompt( L( 'tlSaveName', 'A name for this saved Interaction' ), '' );
+						if ( ! name || ! String( name ).trim() ) { return; }
+						$.post( cfg.ajaxUrl, { action: 'upw_ix_preset_save', nonce: cfg.ixPresetNonce, name: name, value: JSON.stringify( v ) } )
+							.done( function ( r ) {
+								var ok = r && r.success;
+								$b.find( '.dashicons' ).attr( 'class', 'dashicons ' + ( ok ? 'dashicons-yes' : 'dashicons-warning' ) );
+								$b.attr( 'title', ok ? L( 'tlSaved', 'Saved as' ) + ' “' + r.data.name + '”' : ( ( r && r.data && r.data.message ) || 'Not saved' ) );
+								if ( ! ok && r && r.data && r.data.message ) { window.alert( r.data.message ); }
+							} );
+					} ).appendTo( $ctl );
+			}
 			$( '<button type="button" class="fw-le-ixtl__close dashicons dashicons-no-alt" title="Close"></button>' ).on( 'click', function () { self.close(); } ).appendTo( $head );
 
 			var ix = ixs.filter( function ( x ) { return x.key === self.key; } )[ 0 ];
